@@ -1,0 +1,12 @@
+ipykernel
+black
+isort
+flake8
+numpy==1.26.0
+pandas==2.1.1
+matplotlib==3.8.0
+seaborn==0.13.0
+scikit-learn==1.5.2
+beautifulsoup4==4.12.3
+nltk==3.9.1
+catboost==1.2.7
