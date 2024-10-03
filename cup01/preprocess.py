@@ -2,6 +2,9 @@ import re
 from functools import partial
 from multiprocessing import Pool
 from typing import Callable, List, Optional
+from datetime import datetime
+from dateutil import parser
+import numpy as np
 
 import nltk
 from bs4 import BeautifulSoup
@@ -121,3 +124,84 @@ class Tokenizer(object):
         func = partial(self.process_one)
         with Pool(n_jobs) as p:
             return p.map(func, arr)
+
+
+class Extractor(object):
+    def __init__(self):
+        pass
+
+    def _try_extract_date_datetime(
+        self, soup: BeautifulSoup
+    ) -> datetime | None:
+        # Possible datetime selectors
+        time_elements = soup.find_all("time", {"datetime": True})
+        if not time_elements:
+            return None
+        for time_element in time_elements:
+            dt = parser.parse(time_element["datetime"])
+            return dt
+        return None
+
+    def _extract_datetime(self, html: str) -> List:
+        soup = BeautifulSoup(html, "html.parser")
+        dt = self._try_extract_date_datetime(soup)
+        if dt:
+            return (
+                dt.year,
+                dt.month,
+                dt.day,
+                dt.hour,
+                dt.minute,
+                dt.second,
+                dt.weekday(),
+            )
+        return (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+
+    def extract_datetime(self, arr: List[str], n_jobs: Optional[int] = None):
+        func = partial(self._extract_datetime)
+        with Pool(n_jobs) as p:
+            return np.array(p.map(func, arr))
+
+    def _try_extract_channel(self, soup: BeautifulSoup) -> str | None:
+        channel = soup.find("article", {"data-channel": True})
+        if not channel:
+            return None
+        return channel["data-channel"]
+
+    def _extract_channel(self, content):
+        soup = BeautifulSoup(content, "html.parser")
+        return self._try_extract_channel(soup)
+
+    def extract_channel(self, arr: List[str], n_jobs: Optional[int] = None):
+        func = partial(self._extract_channel)
+        with Pool(n_jobs) as p:
+            return np.array(p.map(func, arr))
+
+    def _try_extract_num_medias(self, soup: BeautifulSoup) -> Optional[int]:
+        medias = soup.find_all(
+            ["img", "iframe", "video", ".instagram-media", ".twitter-tweet"]
+        )
+        return len(medias)
+
+    def _try_extract_num_links(self, soup: BeautifulSoup) -> Optional[int]:
+        links = soup.find_all(["a"])
+        return len(links)
+
+    def _extract_counts(self, text: str) -> List[int]:
+        soup = BeautifulSoup(text, "html.parser")
+        num_medias = self._try_extract_num_medias(soup)
+        num_links = self._try_extract_num_links(soup)
+        return [num_medias, num_links]
+
+    def extract_counts(self, texts: List[str]) -> np.ndarray:
+        with Pool() as p:
+            counts = p.map(self._extract_counts, texts)
+        return np.array(counts)
