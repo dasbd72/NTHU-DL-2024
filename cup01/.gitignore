@@ -1,3 +1,4 @@
 data/*
 output/*
 cache/*
+catboost_info/*
