@@ -92,4 +92,3 @@ def test_mlflow_connection():
             f.write("hello world")
         mlflow.log_artifact("/tmp/test.txt")
         mlflow.get_artifact_uri()
-    mlflow.delete_experiment("test_connection")
