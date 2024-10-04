@@ -22,20 +22,30 @@ class Preprocessor(object):
         self.pipeline.append(func)
         return self
 
-    def _parse_html(self, html: str) -> str:
+    def _parse_html(self, html: str, no_head=True) -> str:
         soup = BeautifulSoup(html, "html.parser")
+        if no_head:
+            for tag in soup.find_all("head"):
+                tag.decompose()
         return soup.get_text()
 
-    def add_parse_html(self):
-        self.add_func(partial(self._parse_html))
+    def add_parse_html(self, no_head=True):
+        self.add_func(partial(self._parse_html, no_head=no_head))
         return self
 
-    def _parse_html_tags(self, html: str, tags: List[str]) -> str:
+    def _parse_html_tags(
+        self, html: str, tags: List[str], no_head=True
+    ) -> str:
         soup = BeautifulSoup(html, "html.parser")
+        if no_head:
+            for tag in soup.find_all("head"):
+                tag.decompose()
         return " ".join([tag.get_text() for tag in soup.find_all(tags)])
 
-    def add_parse_html_tags(self, tags: List[str]):
-        self.add_func(partial(self._parse_html_tags, tags=tags))
+    def add_parse_html_tags(self, tags: List[str], no_head=True):
+        self.add_func(
+            partial(self._parse_html_tags, tags=tags, no_head=no_head)
+        )
         return self
 
     def _lowercase(self, x: str) -> str:
@@ -170,6 +180,17 @@ class Extractor(object):
         with Pool(n_jobs) as p:
             return np.array(p.map(func, arr))
 
+    def datetime_columns(self):
+        return [
+            "year",
+            "month",
+            "day",
+            "hour",
+            "minute",
+            "second",
+            "weekday",
+        ]
+
     def _try_extract_channel(self, soup: BeautifulSoup) -> str | None:
         channel = soup.find("article", {"data-channel": True})
         if not channel:
@@ -185,23 +206,71 @@ class Extractor(object):
         with Pool(n_jobs) as p:
             return np.array(p.map(func, arr))
 
-    def _try_extract_num_medias(self, soup: BeautifulSoup) -> Optional[int]:
-        medias = soup.find_all(
-            ["img", "iframe", "video", ".instagram-media", ".twitter-tweet"]
-        )
-        return len(medias)
-
-    def _try_extract_num_links(self, soup: BeautifulSoup) -> Optional[int]:
-        links = soup.find_all(["a"])
-        return len(links)
-
     def _extract_counts(self, text: str) -> List[int]:
         soup = BeautifulSoup(text, "html.parser")
-        num_medias = self._try_extract_num_medias(soup)
-        num_links = self._try_extract_num_links(soup)
-        return [num_medias, num_links]
+        selectors = [
+            "h1",
+            "h2",
+            "img",
+            "iframe",
+            "video",
+            ".instagram-media",
+            ".twitter-tweet",
+            "a",
+            "div",
+            "p",
+            "section",
+        ]
+        # Counts of number of each selectors
+        counts = [len(soup.select(selector)) for selector in selectors]
+        # Words count of all text
+        counts += [len(soup.get_text().split())]
+        # Words count of all h1
+        counts += [
+            sum([len(h1.get_text().split()) for h1 in soup.select("h1")])
+        ]
+        return counts
 
     def extract_counts(self, texts: List[str]) -> np.ndarray:
         with Pool() as p:
             counts = p.map(self._extract_counts, texts)
         return np.array(counts)
+
+    def counts_columns(self):
+        return [
+            "h1",
+            "h2",
+            "img",
+            "iframe",
+            "video",
+            "instagram",
+            "twitter",
+            "a",
+            "div",
+            "p",
+            "section",
+            "wc",
+            "wc_h1",
+        ]
+
+    def _extract_categories(self, html: str) -> List[str]:
+        soup = BeautifulSoup(html, "html.parser")
+        # Find the footer containing the categories
+        footer = soup.find("footer", class_="article-topics")
+        if footer is None:
+            return []
+        # Extract the categories (anchor text) into a list of strings
+        categories_set = set()
+        for a in footer.find_all("a", href=True):
+            category = a["href"].strip("/category/").strip("/").lower()
+            category = re.sub(r"[^a-zA-Z\s]", "", category)
+            if category == "":
+                continue
+            categories_set.add(category)
+        categories = np.array(list(categories_set))
+        return categories
+
+    def extract_categories(self, arr: List[str], n_jobs: Optional[int] = None):
+        func = partial(self._extract_categories)
+        with Pool(n_jobs) as p:
+            return p.map(func, arr)
