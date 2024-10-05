@@ -27,18 +27,21 @@ def plot_auc(train_auc_list, val_auc_list, file_path=None):
     plt.show()
 
 
-def plot_correlations(X, y, file_path=None):
+def plot_correlations(
+    X, y, file_path=None, figsize=None, top_n=10, print_values=False
+):
     correlations = []
     for i in range(X.shape[1]):
         correlations.append(
             (X.columns[i], np.corrcoef(X.values[:, i], y)[0, 1])
         )
-    correlations = sorted(correlations, key=lambda x: -abs(x[1]))
-    for c in correlations[:10]:
-        print(c)
-    plt.figure(figsize=(3, 3))
+    correlations = sorted(correlations, key=lambda x: -abs(x[1]))[:top_n]
+    if print_values:
+        for c in correlations:
+            print(c)
+    plt.figure(figsize=figsize)
     plt.barh(
-        range(X.shape[1]),
+        range(len(correlations)),
         [c[1] for c in reversed(correlations)],
         tick_label=[c[0] for c in reversed(correlations)],
     )
