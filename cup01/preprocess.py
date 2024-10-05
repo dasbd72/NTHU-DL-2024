@@ -1,13 +1,13 @@
 import re
+from datetime import datetime
 from functools import partial
 from multiprocessing import Pool
 from typing import Callable, List, Optional
-from datetime import datetime
-from dateutil import parser
-import numpy as np
 
 import nltk
+import numpy as np
 from bs4 import BeautifulSoup
+from dateutil import parser
 from nltk.corpus import stopwords
 from nltk.stem.porter import PorterStemmer
 

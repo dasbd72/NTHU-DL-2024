@@ -1,5 +1,5 @@
 ipykernel
-black
+black[jupyter]
 isort
 flake8
 numpy==1.26.0
