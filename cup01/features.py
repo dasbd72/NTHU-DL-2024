@@ -28,6 +28,12 @@ class Features(object):
         test_categories_path: Optional[str] = None,
         categories_train_min: int = 1,
         categories_test_min: int = 1,
+        train_parsed_html_path: Optional[str] = None,
+        test_parsed_html_path: Optional[str] = None,
+        preprocessor: Optional[preprocess.Preprocessor] = None,
+        train_tokens_path: Optional[str] = None,
+        test_tokens_path: Optional[str] = None,
+        tokenizer: Optional[preprocess.Tokenizer] = None,
     ):
         # Input data
         self.X_contents = X_contents
@@ -89,6 +95,20 @@ class Features(object):
         self.X_test_categories: Optional[np.ndarray] = None  # Final features
         self.mlb_categories = MultiLabelBinarizer()
         self.sc_categories = StandardScaler()
+
+        # Extracting features from parsed html
+        self.X_parsed_html: Optional[np.ndarray] = None
+        self.X_test_parsed_html: Optional[np.ndarray] = None
+        self.X_tokens: Optional[np.ndarray] = None
+        self.X_test_tokens: Optional[np.ndarray] = None
+        self.setup_extract_tokens(
+            train_parsed_html_path,
+            test_parsed_html_path,
+            preprocessor,
+            train_tokens_path,
+            test_tokens_path,
+            tokenizer,
+        )
 
     # Extract datetime features
     def extract_datetime_features(self):
@@ -250,3 +270,59 @@ class Features(object):
                 for category in common_categories
             ]
         )
+
+    def setup_extract_tokens(
+        self,
+        train_parsed_html_path: Optional[str] = None,
+        test_parsed_html_path: Optional[str] = None,
+        preprocessor: Optional[preprocess.Preprocessor] = None,
+        train_tokens_path: Optional[str] = None,
+        test_tokens_path: Optional[str] = None,
+        tokenizer: Optional[preprocess.Tokenizer] = None,
+    ):
+        self.train_parsed_html_path = train_parsed_html_path
+        self.test_parsed_html_path = test_parsed_html_path
+        self.preprocessor = preprocessor
+        self.train_tokens_path = train_tokens_path
+        self.test_tokens_path = test_tokens_path
+        self.tokenizer = tokenizer
+        return self
+
+    def extract_tokens(self):
+        if self.preprocessor is None:
+            raise ValueError("Preprocessor is not set")
+        if self.tokenizer is None:
+            raise ValueError("Tokenizer is not set")
+
+        if self.train_parsed_html_path is not None:
+            self.X_parsed_html = do_or_load(
+                self.train_parsed_html_path,
+                lambda: self.preprocessor.process(self.X_contents),
+            )
+        else:
+            self.X_parsed_html = self.preprocessor.process(self.X_contents)
+        if self.test_parsed_html_path is not None:
+            self.X_test_parsed_html = do_or_load(
+                self.test_parsed_html_path,
+                lambda: self.preprocessor.process(self.X_test_contents),
+            )
+        else:
+            self.X_test_parsed_html = self.preprocessor.process(
+                self.X_test_contents
+            )
+        if self.train_tokens_path is not None:
+            self.X_tokens = do_or_load(
+                self.train_tokens_path,
+                lambda: self.tokenizer.process(self.X_parsed_html),
+            )
+        else:
+            self.X_tokens = self.tokenizer.process(self.X_parsed_html)
+        if self.test_tokens_path is not None:
+            self.X_test_tokens = do_or_load(
+                self.test_tokens_path,
+                lambda: self.tokenizer.process(self.X_test_parsed_html),
+            )
+        else:
+            self.X_test_tokens = self.tokenizer.process(
+                self.X_test_parsed_html
+            )
