@@ -28,6 +28,8 @@ class Features(object):
         test_categories_path: Optional[str] = None,
         categories_train_min: int = 1,
         categories_test_min: int = 1,
+        train_scores_path: Optional[str] = None,
+        test_scores_path: Optional[str] = None,
         train_parsed_html_path: Optional[str] = None,
         test_parsed_html_path: Optional[str] = None,
         preprocessor: Optional[preprocess.Preprocessor] = None,
@@ -95,6 +97,15 @@ class Features(object):
         self.X_test_categories: Optional[np.ndarray] = None  # Final features
         self.mlb_categories = MultiLabelBinarizer()
         self.sc_categories = StandardScaler()
+        # Scores features
+        self.train_scores_path = train_scores_path
+        self.test_scores_path = test_scores_path
+        self.scores_columns: Optional[List[str]] = None
+        self.X_scores_float: Optional[np.ndarray] = None
+        self.X_scores: Optional[np.ndarray] = None
+        self.X_test_scores_float: Optional[np.ndarray] = None
+        self.X_test_scores: Optional[np.ndarray] = None
+        self.sc_scores = StandardScaler()
 
         # Extracting features from parsed html
         self.X_parsed_html: Optional[np.ndarray] = None
@@ -270,6 +281,29 @@ class Features(object):
                 for category in common_categories
             ]
         )
+
+    def extract_scores_features(self):
+        if self.train_scores_path is not None:
+            self.X_scores_float = do_or_load(
+                self.train_scores_path,
+                lambda: self.extractor.extract_scores(self.X_contents),
+            )
+        else:
+            self.X_scores_float = self.extractor.extract_scores(
+                self.X_contents
+            )
+        if self.test_scores_path is not None:
+            self.X_test_scores_float = do_or_load(
+                self.test_scores_path,
+                lambda: self.extractor.extract_scores(self.X_test_contents),
+            )
+        else:
+            self.X_test_scores_float = self.extractor.extract_scores(
+                self.X_test_contents
+            )
+        self.X_scores = self.sc_scores.fit_transform(self.X_scores_float)
+        self.X_test_scores = self.sc_scores.transform(self.X_test_scores_float)
+        self.scores_columns = self.extractor.scores_columns()
 
     def setup_extract_tokens(
         self,

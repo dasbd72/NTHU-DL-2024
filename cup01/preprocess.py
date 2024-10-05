@@ -6,10 +6,12 @@ from typing import Callable, List, Optional
 
 import nltk
 import numpy as np
+import textstat
 from bs4 import BeautifulSoup
 from dateutil import parser
 from nltk.corpus import stopwords
 from nltk.stem.porter import PorterStemmer
+from textblob import TextBlob
 
 nltk.download("stopwords", quiet=True)
 
@@ -274,3 +276,26 @@ class Extractor(object):
         func = partial(self._extract_categories)
         with Pool(n_jobs) as p:
             return p.map(func, arr)
+
+    def _extrain_scores(self, html: str) -> List[float]:
+        soup = BeautifulSoup(html, "html.parser")
+        text = soup.get_text()
+        # Remove white spaces
+        text = re.sub(r"\s+", " ", text).strip()
+        # Remove non-alphanumeric characters
+        text = re.sub(r"[^a-zA-Z\s]", "", text)
+        sentiment = TextBlob(text).sentiment
+        scores = [
+            sentiment.polarity,
+            sentiment.subjectivity,
+            textstat.flesch_reading_ease(text),
+        ]
+        return scores
+
+    def extract_scores(self, arr: List[str], n_jobs: Optional[int] = None):
+        func = partial(self._extrain_scores)
+        with Pool(n_jobs) as p:
+            return np.array(p.map(func, arr))
+
+    def scores_columns(self):
+        return ["polarity", "subjectivity", "readability"]
