@@ -1,9 +1,9 @@
 import mlflow
 import numpy as np
+from joblib import Parallel, delayed
 from scipy import sparse
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
-from joblib import Parallel, delayed
 
 
 def get_batches(X, y, batch_size=32, repeated=False):
