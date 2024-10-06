@@ -1,19 +1,33 @@
+import logging
 import re
-from datetime import datetime
 from functools import partial
 from multiprocessing import Pool
+from pathlib import Path
 from typing import Callable, List, Optional
 
 import nltk
-import numpy as np
+import pandas as pd
 import textstat
 from bs4 import BeautifulSoup
 from dateutil import parser
 from nltk.corpus import stopwords
 from nltk.stem.porter import PorterStemmer
 from textblob import TextBlob
+from tqdm import tqdm
 
 nltk.download("stopwords", quiet=True)
+
+
+def lowercase(x: str) -> str:
+    return x.lower()
+
+
+def remove_non_alphanumeric(x: str) -> str:
+    return re.sub(r"[^a-zA-Z\s]", "", x)
+
+
+def remove_extra_whitespace(x: str) -> str:
+    return re.sub(r"\s+", " ", x).strip()
 
 
 class Preprocessor(object):
@@ -97,7 +111,7 @@ class Preprocessor(object):
         func = partial(self.process_one)
         with Pool(n_jobs) as p:
             result = p.map(func, arr)
-            return p.map(func, arr)
+            return result
 
 
 class Tokenizer(object):
@@ -139,51 +153,112 @@ class Tokenizer(object):
 
 
 class Extractor(object):
-    def __init__(self):
-        pass
+    DATA_VERSION = "0.1"
 
-    def _try_extract_date_datetime(
-        self, soup: BeautifulSoup
-    ) -> datetime | None:
-        # Possible datetime selectors
-        time_elements = soup.find_all("time", {"datetime": True})
-        if not time_elements:
-            return None
-        for time_element in time_elements:
-            dt = parser.parse(time_element["datetime"])
-            return dt
-        return None
-
-    def _extract_datetime(self, html: str) -> List:
-        soup = BeautifulSoup(html, "html.parser")
-        dt = self._try_extract_date_datetime(soup)
-        if dt:
-            return (
-                dt.year,
-                dt.month,
-                dt.day,
-                dt.hour,
-                dt.minute,
-                dt.second,
-                dt.weekday(),
+    def __init__(
+        self,
+        cache_dir: Optional[str] = None,
+        cache_path: Optional[str] = None,
+        logger: Optional[logging.Logger] = None,
+    ):
+        if cache_dir is not None:
+            cache_dir = cache_dir
+        else:
+            cache_dir = "./cache"
+        cache_dir = Path(cache_dir)
+        if cache_path is not None:
+            self.cache_path = Path(cache_path)
+        else:
+            self.cache_path = cache_dir / "extractor_cache_{}.csv".format(
+                self.DATA_VERSION
             )
-        return (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        )
+        if logger is not None:
+            self.logger = logger
+        else:
+            self.logger = logging.getLogger(__name__)
+            self.logger.setLevel(logging.INFO)
+            stream_handler = logging.StreamHandler()
+            stream_handler.setLevel(logging.INFO)
+            self.logger.addHandler(stream_handler)
 
-    def extract_datetime(self, arr: List[str], n_jobs: Optional[int] = None):
-        func = partial(self._extract_datetime)
+        self.stop_words = set(stopwords.words("english"))
+        self.stemmer = PorterStemmer()
+        self.columns = self.get_columns()
+        self.columns_to_extract = []
+
+    def self_test(self):
+        self.logger.info("Self test")
+        self.logger.info("Extracting from test html")
+        test_html = "<html><head><title>Test</title></head><body><h1>Test</h1><p>Test</p></body></html>"
+        info = self.extract([test_html], cache=False)
+        assert info.shape == (1, len(self.columns))
+        self.logger.info("Self test passed")
+
+    def extract(
+        self,
+        arr: List[str],
+        n_jobs: Optional[int] = None,
+        cache: bool = True,
+    ):
+        self.logger.info("Extracting features")
+        if cache:
+            if self.cache_path.exists():
+                self.logger.info("Found cache, loading")
+                df = pd.read_csv(self.cache_path)
+            else:
+                df = self._extract(arr, n_jobs=n_jobs)
+                df.to_csv(self.cache_path, index=False)
+        else:
+            df = self._extract(arr, n_jobs=n_jobs)
+        return df
+
+    def _extract(self, arr: List[str], n_jobs: Optional[int] = None):
+        func = partial(self._extract_single)
         with Pool(n_jobs) as p:
-            return np.array(p.map(func, arr))
+            values = list(tqdm(p.imap(func, arr), total=len(arr)))
+        df = pd.DataFrame(values, columns=self.columns)
+        return df
 
-    def datetime_columns(self):
-        return [
+    def _extract_single(self, html: str) -> List:
+        soup = BeautifulSoup(html, "html.parser")
+        info = []
+        # Extract datetime
+        info += self._extract_datetime(soup)
+        # Extract channel
+        info += self._extract_channel(soup)
+        # Extract categories
+        info += self._extract_categories(soup)
+        # Extract by selector
+        text_selectors = [
+            "h1",
+            "h2",
+            "p",
+            "a",
+            "div",
+            "p",
+            "section",
+            "footer>a[href]",
+        ]
+        non_text_selectors = [
+            "img",
+            "iframe",
+            "video",
+            ".instagram-media",
+            ".twitter-tweet",
+        ]
+        for selector in text_selectors:
+            info += self._extract_by_selector(
+                soup, selector, analyze_text=True
+            )
+        for selector in non_text_selectors:
+            info += self._extract_by_selector(
+                soup, selector, analyze_text=False
+            )
+        return info
+
+    def get_columns(self):
+        column = []
+        datetime_columns = [
             "year",
             "month",
             "day",
@@ -192,75 +267,81 @@ class Extractor(object):
             "second",
             "weekday",
         ]
+        column += datetime_columns
 
-    def _try_extract_channel(self, soup: BeautifulSoup) -> str | None:
-        channel = soup.find("article", {"data-channel": True})
-        if not channel:
-            return None
-        return channel["data-channel"]
+        channel_columns = ["channel"]
+        column += channel_columns
 
-    def _extract_channel(self, content):
-        soup = BeautifulSoup(content, "html.parser")
-        return self._try_extract_channel(soup)
+        categories_columns = ["categories"]
+        column += categories_columns
 
-    def extract_channel(self, arr: List[str], n_jobs: Optional[int] = None):
-        func = partial(self._extract_channel)
-        with Pool(n_jobs) as p:
-            return np.array(p.map(func, arr))
-
-    def _extract_counts(self, text: str) -> List[int]:
-        soup = BeautifulSoup(text, "html.parser")
-        selectors = [
+        text_selector_names = [
             "h1",
             "h2",
-            "img",
-            "iframe",
-            "video",
-            ".instagram-media",
-            ".twitter-tweet",
+            "p",
             "a",
             "div",
             "p",
             "section",
+            "footer_a",
         ]
-        # Counts of number of each selectors
-        counts = [len(soup.select(selector)) for selector in selectors]
-        # Words count of all text
-        counts += [len(soup.get_text().split())]
-        # Words count of all h1
-        counts += [
-            sum([len(h1.get_text().split()) for h1 in soup.select("h1")])
-        ]
-        return counts
-
-    def extract_counts(self, texts: List[str]) -> np.ndarray:
-        with Pool() as p:
-            counts = p.map(self._extract_counts, texts)
-        return np.array(counts)
-
-    def counts_columns(self):
-        return [
-            "h1",
-            "h2",
+        for name in text_selector_names:
+            column += self._column_names_by_selector_name(
+                name, analyze_text=True
+            )
+        non_text_selector_names = [
             "img",
             "iframe",
             "video",
             "instagram",
             "twitter",
-            "a",
-            "div",
-            "p",
-            "section",
-            "wc",
-            "wc_h1",
+        ]
+        for name in non_text_selector_names:
+            column += self._column_names_by_selector_name(
+                name, analyze_text=False
+            )
+        return column
+
+    def _extract_datetime(self, soup: BeautifulSoup) -> List:
+        # Possible datetime selectors
+        time_elements = soup.find_all("time", {"datetime": True})
+        if time_elements is None:
+            return None
+        dt = None
+        for time_element in time_elements:
+            dt = parser.parse(time_element["datetime"])
+        # Extract datetime
+        if dt:
+            return [
+                dt.year,
+                dt.month,
+                dt.day,
+                dt.hour,
+                dt.minute,
+                dt.second,
+                dt.weekday(),
+            ]
+        return [
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         ]
 
-    def _extract_categories(self, html: str) -> List[str]:
-        soup = BeautifulSoup(html, "html.parser")
+    def _extract_channel(self, soup: BeautifulSoup) -> List[str]:
+        channel = soup.find("article", {"data-channel": True})
+        if not channel:
+            return [None]
+        return [channel["data-channel"]]
+
+    def _extract_categories(self, soup: BeautifulSoup) -> List[str]:
         # Find the footer containing the categories
         footer = soup.find("footer", class_="article-topics")
         if footer is None:
-            return []
+            return [""]
         # Extract the categories (anchor text) into a list of strings
         categories_set = set()
         for a in footer.find_all("a", href=True):
@@ -269,33 +350,61 @@ class Extractor(object):
             if category == "":
                 continue
             categories_set.add(category)
-        categories = np.array(list(categories_set))
-        return categories
+        categories = " ".join(list(categories_set))
+        return [categories]
 
-    def extract_categories(self, arr: List[str], n_jobs: Optional[int] = None):
-        func = partial(self._extract_categories)
-        with Pool(n_jobs) as p:
-            return p.map(func, arr)
+    def _extract_by_selector(
+        self,
+        soup: BeautifulSoup,
+        selector: str,
+        analyze_text: bool = False,
+    ) -> List[int]:
+        # Extract elements by selector
+        el = soup.select(selector)
+        info = []
+        # Count of elements
+        info += [len(el)]
+        if not analyze_text:
+            return info
 
-    def _extrain_scores(self, html: str) -> List[float]:
-        soup = BeautifulSoup(html, "html.parser")
-        text = soup.get_text()
-        # Remove white spaces
-        text = re.sub(r"\s+", " ", text).strip()
-        # Remove non-alphanumeric characters
-        text = re.sub(r"[^a-zA-Z\s]", "", text)
-        sentiment = TextBlob(text).sentiment
-        scores = [
-            sentiment.polarity,
-            sentiment.subjectivity,
-            textstat.flesch_reading_ease(text),
+        # Text of elements
+        text = " ".join([e.get_text() for e in el])
+        text = lowercase(text)
+        text = remove_non_alphanumeric(text)
+        text = remove_extra_whitespace(text)
+        # Token count
+        info += [len(text.split())]
+        # Unique token count
+        info += [len(set(text.split()))]
+        # Non-stopword token count
+        non_stopword_tokens = [
+            t for t in text.split() if t not in stopwords.words("english")
         ]
-        return scores
+        info += [len(non_stopword_tokens)]
+        # Non-stopword unique token count
+        info += [len(set(non_stopword_tokens))]
+        # Sentiment
+        sentiment = TextBlob(text).sentiment
+        info += [sentiment.polarity, sentiment.subjectivity]
+        # Readability
+        info += [textstat.flesch_reading_ease(text)]
+        return info
 
-    def extract_scores(self, arr: List[str], n_jobs: Optional[int] = None):
-        func = partial(self._extrain_scores)
-        with Pool(n_jobs) as p:
-            return np.array(p.map(func, arr))
-
-    def scores_columns(self):
-        return ["polarity", "subjectivity", "readability"]
+    def _column_names_by_selector_name(
+        self, name: str, analyze_text: bool = False
+    ) -> List[str]:
+        columns = [
+            f"{name}_count",
+        ]
+        if not analyze_text:
+            return columns
+        columns += [
+            f"{name}_token_count",
+            f"{name}_unique_token_count",
+            f"{name}_non_stop_token_count",
+            f"{name}_non_stop_unique_token_count",
+            f"{name}_polarity",
+            f"{name}_subjectivity",
+            f"{name}_readability",
+        ]
+        return columns
