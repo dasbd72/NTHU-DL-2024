@@ -1,11 +1,9 @@
-from typing import List, Optional
+from typing import Optional
 
 import numpy as np
-from sklearn.preprocessing import (
-    MultiLabelBinarizer,
-    OneHotEncoder,
-    StandardScaler,
-)
+import pandas as pd
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder
 
 import preprocess
 from utils import do_or_load
@@ -18,18 +16,11 @@ class Features(object):
         y: Optional[np.ndarray] = None,
         X_test_contents: Optional[np.ndarray] = None,
         extractor: Optional[preprocess.Extractor] = None,
-        train_datetime_path: Optional[str] = None,
-        test_datetime_path: Optional[str] = None,
-        train_channel_path: Optional[str] = None,
-        test_channel_path: Optional[str] = None,
-        train_counts_path: Optional[str] = None,
-        test_counts_path: Optional[str] = None,
-        train_categories_path: Optional[str] = None,
-        test_categories_path: Optional[str] = None,
-        categories_train_min: int = 1,
-        categories_test_min: int = 1,
-        train_scores_path: Optional[str] = None,
-        test_scores_path: Optional[str] = None,
+        category_vectorize=False,
+        category_max_features: Optional[int] = 1000,
+        category_vectorizer=None,
+        category_train_min: int = 1,
+        category_test_min: int = 1,
         train_parsed_html_path: Optional[str] = None,
         test_parsed_html_path: Optional[str] = None,
         preprocessor: Optional[preprocess.Preprocessor] = None,
@@ -50,62 +41,25 @@ class Features(object):
             self.extractor = extractor
         else:
             self.extractor = preprocess.Extractor()
-        # Datetime features
-        self.train_datetime_path = train_datetime_path
-        self.test_datetime_path = test_datetime_path
-        self.datetime_columns: Optional[List[str]] = None
-        self.X_datetime_int: Optional[np.ndarray] = None
-        self.X_datetime: Optional[np.ndarray] = None  # Final features
-        self.X_test_datetime_int: Optional[np.ndarray] = None
-        self.X_test_datetime: Optional[np.ndarray] = None  # Final features
-        self.sc_datetime = StandardScaler()
-        # Channel features
-        self.train_channel_path = train_channel_path
-        self.test_channel_path = test_channel_path
-        self.channel_columns: Optional[List[str]] = None
-        self.X_channel_str: Optional[np.ndarray] = None
-        self.X_channel_onehot: Optional[np.ndarray] = None
-        self.X_channel: Optional[np.ndarray] = None  # Final features
-        self.X_test_channel_str: Optional[np.ndarray] = None
-        self.X_test_channel_onehot: Optional[np.ndarray] = None
-        self.X_test_channel: Optional[np.ndarray] = None  # Final features
-        self.onehot_channel = OneHotEncoder(
-            handle_unknown="ignore", sparse_output=False
-        )
-        self.sc_channel = StandardScaler()
-        # Counts features
-        self.train_counts_path = train_counts_path
-        self.test_counts_path = test_counts_path
-        self.counts_columns: Optional[List[str]] = None
-        self.X_counts_int: Optional[np.ndarray] = None
-        self.X_counts: Optional[np.ndarray] = None  # Final features
-        self.X_test_counts_int: Optional[np.ndarray] = None
-        self.X_test_counts: Optional[np.ndarray] = None  # Final features
-        self.sc_counts = StandardScaler()
-        # Categories features
-        self.train_categories_path = train_categories_path
-        self.test_categories_path = test_categories_path
-        self.categories_train_min = categories_train_min
-        self.categories_test_min = categories_test_min
-        self.categories_columns: Optional[List[str]] = None
-        self.catefories_counts: Optional[np.ndarray] = None
-        self.X_categories_list_str: Optional[List] = None
-        self.X_categories_mlb: Optional[np.ndarray] = None
-        self.X_categories: Optional[np.ndarray] = None  # Final features
-        self.X_test_categories_list_str: Optional[List] = None
-        self.X_test_categories_mlb: Optional[np.ndarray] = None
-        self.X_test_categories: Optional[np.ndarray] = None  # Final features
-        self.mlb_categories = MultiLabelBinarizer()
-        self.sc_categories = StandardScaler()
-        # Scores features
-        self.train_scores_path = train_scores_path
-        self.test_scores_path = test_scores_path
-        self.scores_columns: Optional[List[str]] = None
-        self.X_scores_float: Optional[np.ndarray] = None
-        self.X_scores: Optional[np.ndarray] = None
-        self.X_test_scores_float: Optional[np.ndarray] = None
-        self.X_test_scores: Optional[np.ndarray] = None
-        self.sc_scores = StandardScaler()
+        self.category_vectorize = category_vectorize
+        self.category_max_features = category_max_features
+        if (
+            not isinstance(category_vectorizer, TfidfVectorizer)
+            and not isinstance(category_vectorizer, CountVectorizer)
+            and category_vectorizer is not None
+        ):
+            raise ValueError("category_vectorizer must be a vectorizer")
+        elif category_vectorizer is None:
+            category_vectorizer = TfidfVectorizer(
+                max_features=self.category_max_features
+            )
+        self.category_vectorizer = category_vectorizer
+        self.category_train_min = category_train_min
+        self.category_test_min = category_test_min
+        self.X_info_raw: Optional[pd.DataFrame] = None
+        self.X_info: Optional[pd.DataFrame] = None
+        self.X_test_info_raw: Optional[pd.DataFrame] = None
+        self.X_test_info: Optional[pd.DataFrame] = None
 
         # Extracting features from parsed html
         self.X_parsed_html: Optional[np.ndarray] = None
@@ -121,189 +75,189 @@ class Features(object):
             tokenizer,
         )
 
-    # Extract datetime features
-    def extract_datetime_features(self):
-        if self.train_datetime_path is not None:
-            self.X_datetime_int = do_or_load(
-                self.train_datetime_path,
-                lambda: self.extractor.extract_datetime(self.X_contents),
-            )
-        else:
-            self.X_datetime_int = self.extractor.extract_datetime(
-                self.X_contents
-            )
-        if self.test_datetime_path is not None:
-            self.X_test_datetime_int = do_or_load(
-                self.test_datetime_path,
-                lambda: self.extractor.extract_datetime(self.X_test_contents),
-            )
-        else:
-            self.X_test_datetime_int = self.extractor.extract_datetime(
-                self.X_test_contents
-            )
-        self.X_datetime = self.sc_datetime.fit_transform(self.X_datetime_int)
-        self.X_test_datetime = self.sc_datetime.transform(
-            self.X_test_datetime_int
+    def extract_info(self):
+        self.X_info_raw = self.extractor.extract(
+            self.X_contents,
+            cache_path="./cache/train_extractor_cache_{}.csv".format(
+                preprocess.Extractor.DATA_VERSION
+            ),
         )
-        self.datetime_columns = self.extractor.datetime_columns()
+        self.X_info = self.X_info_raw.copy(True)
+        self.X_test_info_raw = self.extractor.extract(
+            self.X_test_contents,
+            cache_path="./cache/test_extractor_cache_{}.csv".format(
+                preprocess.Extractor.DATA_VERSION
+            ),
+        )
+        self.X_test_info = self.X_test_info_raw.copy(True)
 
-    # Extract channel features
-    def extract_channel_features(self):
-        if self.train_channel_path is not None:
-            self.X_channel_str = do_or_load(
-                self.train_channel_path,
-                lambda: self.extractor.extract_channel(self.X_contents),
-            )
-        else:
-            self.X_channel_str = self.extractor.extract_channel(
-                self.X_contents
-            )
-        if self.test_channel_path is not None:
-            self.X_test_channel_str = do_or_load(
-                self.test_channel_path,
-                lambda: self.extractor.extract_channel(self.X_test_contents),
-            )
-        else:
-            self.X_test_channel_str = self.extractor.extract_channel(
-                self.X_test_contents
-            )
-        self.X_channel_onehot = self.onehot_channel.fit_transform(
-            self.X_channel_str.reshape(-1, 1)
+        # One-hot encode weekday
+        weekday_encoder = OneHotEncoder(
+            handle_unknown="ignore", sparse_output=False
         )
-        self.X_test_channel_onehot = self.onehot_channel.transform(
-            self.X_test_channel_str.reshape(-1, 1)
-        )
-        self.X_channel = self.sc_channel.fit_transform(self.X_channel_onehot)
-        self.X_test_channel = self.sc_channel.transform(
-            self.X_test_channel_onehot
-        )
-        self.channel_columns = self.onehot_channel.categories_[0]
+        weekday_encoder.fit([[i] for i in range(7)])
 
-    # Extract counts features
-    def extract_counts_features(self):
-        if self.train_counts_path is not None:
-            self.X_counts_int = do_or_load(
-                self.train_counts_path,
-                lambda: self.extractor.extract_counts(self.X_contents),
+        def process_weekday(df: pd.DataFrame) -> pd.DataFrame:
+            columns = ["weekday_{}".format(i) for i in range(7)]
+            onehot = weekday_encoder.transform(
+                df["weekday"].values.reshape(-1, 1)
             )
-        else:
-            self.X_counts_int = self.extractor.extract_counts(self.X_contents)
-        if self.test_counts_path is not None:
-            self.X_test_counts_int = do_or_load(
-                self.test_counts_path,
-                lambda: self.extractor.extract_counts(self.X_test_contents),
-            )
-        else:
-            self.X_test_counts_int = self.extractor.extract_counts(
-                self.X_test_contents
-            )
-        self.X_counts = self.sc_counts.fit_transform(self.X_counts_int)
-        self.X_test_counts = self.sc_counts.transform(self.X_test_counts_int)
-        self.counts_columns = self.extractor.counts_columns()
+            new_df = df.drop(columns=["weekday"])
+            for i, column in enumerate(columns):
+                new_df[column] = onehot[:, i]
+            return new_df
 
-    # Extract categories features
-    def extract_categories_features(self):
-        # Step 1: Extract categories from contents
-        if self.train_categories_path is not None:
-            self.X_categories_list_str = do_or_load(
-                self.train_categories_path,
-                lambda: self.extractor.extract_categories(self.X_contents),
-            )
-        else:
-            self.X_categories_list_str = self.extractor.extract_categories(
-                self.X_contents
-            )
-        if self.test_categories_path is not None:
-            self.X_test_categories_list_str = do_or_load(
-                self.test_categories_path,
-                lambda: self.extractor.extract_categories(
-                    self.X_test_contents
-                ),
-            )
-        else:
-            self.X_test_categories_list_str = (
-                self.extractor.extract_categories(self.X_test_contents)
-            )
+        self.X_info = process_weekday(self.X_info)
+        self.X_test_info = process_weekday(self.X_test_info)
 
-        # Step 2: Count categories
-        def count_categories(categories_list_str):
-            categories_dict = {}
-            for categories in categories_list_str:
-                for category in categories:
-                    categories_dict[category] = (
-                        categories_dict.get(category, 0) + 1
-                    )
-            return categories_dict
+        # One-hot encode month
+        month_encoder = OneHotEncoder(
+            handle_unknown="ignore", sparse_output=False
+        )
+        month_encoder.fit([[i] for i in range(12)])
 
-        all_X_categories_dict = count_categories(self.X_categories_list_str)
-        all_X_test_categories_dict = count_categories(
-            self.X_test_categories_list_str
+        def process_month(df: pd.DataFrame) -> pd.DataFrame:
+            columns = ["month_{}".format(i) for i in range(12)]
+            onehot = month_encoder.transform(df["month"].values.reshape(-1, 1))
+            new_df = df.drop(columns=["month"])
+            for i, column in enumerate(columns):
+                new_df[column] = onehot[:, i]
+            return new_df
+
+        self.X_info = process_month(self.X_info)
+        self.X_test_info = process_month(self.X_test_info)
+
+        # One-hot encode channel
+        common_channels = set(self.X_info["channel"].unique()).intersection(
+            set(self.X_test_info["channel"].unique())
         )
-        # Step 3: Find common categories
-        all_X_categories_set = set(all_X_categories_dict.keys())
-        all_X_test_categories_set = set(all_X_test_categories_dict.keys())
-        all_common_categories_set = all_X_categories_set.intersection(
-            all_X_test_categories_set
+        channel_encoder = OneHotEncoder(
+            handle_unknown="ignore", sparse_output=False
         )
-        # Step 4: Filter common categories with count > categories_min_count
-        common_categories_dict = {}
-        for category in all_common_categories_set:
-            if (
-                all_X_categories_dict.get(category, 0)
-                >= self.categories_train_min
-                and all_X_test_categories_dict.get(category, 0)
-                >= self.categories_test_min
-            ):
-                common_categories_dict[category] = all_X_categories_dict.get(
-                    category, 0
-                ) + all_X_test_categories_dict.get(category, 0)
-        common_categories_set = set(common_categories_dict.keys())
-        common_categories = np.array(list(common_categories_set)).astype(str)
-        # Step 5: Transform categories to one-hot
-        self.mlb_categories.fit(common_categories.reshape(-1, 1))
-        self.X_categories_mlb = self.mlb_categories.transform(
-            self.X_categories_list_str
-        )
-        self.X_test_categories_mlb = self.mlb_categories.transform(
-            self.X_test_categories_list_str
-        )
-        # Step 6: Scale categories into final features
-        self.X_categories = self.sc_categories.fit_transform(
-            self.X_categories_mlb
-        )
-        self.X_test_categories = self.sc_categories.transform(
-            self.X_test_categories_mlb
-        )
-        self.categories_columns = common_categories
-        self.catefories_counts = np.array(
-            [
-                common_categories_dict[category]
-                for category in common_categories
+        channel_encoder.fit([[channel] for channel in common_channels])
+
+        def process_channel(df: pd.DataFrame) -> pd.DataFrame:
+            columns = [
+                "channel_{}".format(channel)
+                for channel in channel_encoder.categories_[0]
             ]
-        )
+            onehot = channel_encoder.transform(
+                df["channel"].values.reshape(-1, 1)
+            )
+            new_df = df.drop(columns=["channel"])
+            for i, column in enumerate(columns):
+                new_df[column] = onehot[:, i]
+            return new_df
 
-    def extract_scores_features(self):
-        if self.train_scores_path is not None:
-            self.X_scores_float = do_or_load(
-                self.train_scores_path,
-                lambda: self.extractor.extract_scores(self.X_contents),
-            )
+        self.X_info = process_channel(self.X_info)
+        self.X_test_info = process_channel(self.X_test_info)
+
+        if self.category_vectorize:
+            # Vectorize categories
+            self.X_info["categories"].fillna("", inplace=True)
+            self.X_test_info["categories"].fillna("", inplace=True)
+            self.category_vectorizer.fit(self.X_info["categories"].values)
+
+            def process_categories(df: pd.DataFrame) -> pd.DataFrame:
+                columns = [
+                    "category_{}".format(column)
+                    for column in self.category_vectorizer.get_feature_names_out()
+                ]
+                new_df = df.drop(columns=["categories"])
+                multihot = self.category_vectorizer.transform(
+                    df["categories"].values
+                ).toarray()
+                for i, column in enumerate(columns):
+                    new_df[column] = multihot[:, i]
+                return new_df
+
+            self.X_info = process_categories(self.X_info)
+            self.X_test_info = process_categories(self.X_test_info)
         else:
-            self.X_scores_float = self.extractor.extract_scores(
-                self.X_contents
+            # Mulihot encode categories
+            self.X_info["categories"].fillna("", inplace=True)
+            self.X_test_info["categories"].fillna("", inplace=True)
+
+            X_categories_list_str = [
+                categories.split(" ")
+                for categories in self.X_info["categories"]
+            ]
+            X_test_categories_list_str = [
+                categories.split(" ")
+                for categories in self.X_test_info["categories"]
+            ]
+
+            # Step 1: Count categories
+            def count_categories(categories_list_str):
+                categories_dict = {}
+                for categories in categories_list_str:
+                    for category in categories:
+                        categories_dict[category] = (
+                            categories_dict.get(category, 0) + 1
+                        )
+                return categories_dict
+
+            all_X_categories_dict = count_categories(X_categories_list_str)
+            all_X_test_categories_dict = count_categories(
+                X_test_categories_list_str
             )
-        if self.test_scores_path is not None:
-            self.X_test_scores_float = do_or_load(
-                self.test_scores_path,
-                lambda: self.extractor.extract_scores(self.X_test_contents),
+
+            # Step 2: Find common categories
+            all_X_categories_set = set(all_X_categories_dict.keys())
+            all_X_test_categories_set = set(all_X_test_categories_dict.keys())
+            all_common_categories_set = all_X_categories_set.intersection(
+                all_X_test_categories_set
             )
-        else:
-            self.X_test_scores_float = self.extractor.extract_scores(
-                self.X_test_contents
+
+            # Step 3: Filter common categories with count > categories_min_count
+            common_categories_dict = {}
+            for category in all_common_categories_set:
+                if (
+                    all_X_categories_dict.get(category, 0)
+                    >= self.category_train_min
+                    and all_X_test_categories_dict.get(category, 0)
+                    >= self.category_test_min
+                ):
+                    common_categories_dict[category] = (
+                        all_X_categories_dict.get(category, 0)
+                        + all_X_test_categories_dict.get(category, 0)
+                    )
+            common_categories_set = set(common_categories_dict.keys())
+            common_categories = np.array(list(common_categories_set)).astype(
+                str
             )
-        self.X_scores = self.sc_scores.fit_transform(self.X_scores_float)
-        self.X_test_scores = self.sc_scores.transform(self.X_test_scores_float)
-        self.scores_columns = self.extractor.scores_columns()
+
+            # Step 4: Transform categories to one-hot
+            mlb_categories = MultiLabelBinarizer(sparse_output=False)
+            mlb_categories.fit(common_categories.reshape(-1, 1))
+
+            self.categories_columns = common_categories
+            self.categories_counts = np.array(
+                [
+                    common_categories_dict[category]
+                    for category in common_categories
+                ]
+            )
+
+            def process_categories(
+                df: pd.DataFrame, categories_list_str: list[list[str]]
+            ) -> pd.DataFrame:
+                columns = [
+                    "category_{}".format(column)
+                    for column in self.categories_columns
+                ]
+                new_df = df.drop(columns=["categories"])
+                multihot = mlb_categories.transform(categories_list_str)
+                for i, column in enumerate(columns):
+                    new_df[column] = multihot[:, i]
+                return new_df
+
+            self.X_info = process_categories(
+                self.X_info, X_categories_list_str
+            )
+            self.X_test_info = process_categories(
+                self.X_test_info, X_test_categories_list_str
+            )
 
     def setup_extract_tokens(
         self,
