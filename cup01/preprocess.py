@@ -1,8 +1,8 @@
 import logging
+import os
 import re
 from functools import partial
 from multiprocessing import Pool
-from pathlib import Path
 from typing import Callable, List, Optional
 
 import nltk
@@ -157,21 +157,8 @@ class Extractor(object):
 
     def __init__(
         self,
-        cache_dir: Optional[str] = None,
-        cache_path: Optional[str] = None,
         logger: Optional[logging.Logger] = None,
     ):
-        if cache_dir is not None:
-            cache_dir = cache_dir
-        else:
-            cache_dir = "./cache"
-        cache_dir = Path(cache_dir)
-        if cache_path is not None:
-            self.cache_path = Path(cache_path)
-        else:
-            self.cache_path = cache_dir / "extractor_cache_{}.csv".format(
-                self.DATA_VERSION
-            )
         if logger is not None:
             self.logger = logger
         else:
@@ -190,7 +177,7 @@ class Extractor(object):
         self.logger.info("Self test")
         self.logger.info("Extracting from test html")
         test_html = "<html><head><title>Test</title></head><body><h1>Test</h1><p>Test</p></body></html>"
-        info = self.extract([test_html], cache=False)
+        info = self.extract([test_html])
         assert info.shape == (1, len(self.columns))
         self.logger.info("Self test passed")
 
@@ -198,16 +185,17 @@ class Extractor(object):
         self,
         arr: List[str],
         n_jobs: Optional[int] = None,
-        cache: bool = True,
+        cache_path: Optional[str] = None,
     ):
         self.logger.info("Extracting features")
-        if cache:
-            if self.cache_path.exists():
+        if cache_path is not None:
+            if os.path.exists(cache_path):
                 self.logger.info("Found cache, loading")
-                df = pd.read_csv(self.cache_path)
+                df = pd.read_csv(cache_path)
             else:
                 df = self._extract(arr, n_jobs=n_jobs)
-                df.to_csv(self.cache_path, index=False)
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                df.to_csv(cache_path, index=False)
         else:
             df = self._extract(arr, n_jobs=n_jobs)
         return df
