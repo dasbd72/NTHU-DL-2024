@@ -2,6 +2,7 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+from tqdm import tqdm
 
 
 def plot_auc(train_auc_list, val_auc_list, file_path=None):
@@ -28,13 +29,23 @@ def plot_auc(train_auc_list, val_auc_list, file_path=None):
 
 
 def plot_correlations(
-    X, y, file_path=None, figsize=None, top_n=10, print_values=False
+    X,
+    y,
+    file_path=None,
+    figsize=None,
+    top_n=10,
+    print_values=False,
+    progress_bar=False,
 ):
     correlations = []
-    for i in range(X.shape[1]):
-        correlations.append(
-            (X.columns[i], np.corrcoef(X.values[:, i], y)[0, 1])
-        )
+    if progress_bar:
+        for i, column in tqdm(enumerate(X.columns)):
+            correlations.append((column, np.corrcoef(X.values[:, i], y)[0, 1]))
+    else:
+        for i in range(X.shape[1]):
+            correlations.append(
+                (X.columns[i], np.corrcoef(X.values[:, i], y)[0, 1])
+            )
     correlations = sorted(correlations, key=lambda x: -abs(x[1]))[:top_n]
     if print_values:
         for c in correlations:
