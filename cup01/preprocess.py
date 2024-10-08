@@ -11,11 +11,13 @@ import textstat
 from bs4 import BeautifulSoup
 from dateutil import parser
 from nltk.corpus import stopwords
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from nltk.stem.porter import PorterStemmer
 from textblob import TextBlob
 from tqdm import tqdm
 
 nltk.download("stopwords", quiet=True)
+nltk.download("vader_lexicon", quiet=True)
 
 
 def lowercase(x: str) -> str:
@@ -153,7 +155,7 @@ class Tokenizer(object):
 
 
 class Extractor(object):
-    DATA_VERSION = "0.1"
+    DATA_VERSION = "0.2"
 
     def __init__(
         self,
@@ -374,6 +376,15 @@ class Extractor(object):
         # Sentiment
         sentiment = TextBlob(text).sentiment
         info += [sentiment.polarity, sentiment.subjectivity]
+        # Sentiment 2
+        sia = SentimentIntensityAnalyzer()
+        sentiment_dict = sia.polarity_scores(text)
+        info += [
+            sentiment_dict["neg"],
+            sentiment_dict["neu"],
+            sentiment_dict["pos"],
+            sentiment_dict["compound"],
+        ]
         # Readability
         info += [textstat.flesch_reading_ease(text)]
         return info
@@ -381,18 +392,23 @@ class Extractor(object):
     def _column_names_by_selector_name(
         self, name: str, analyze_text: bool = False
     ) -> List[str]:
+        prefix = f"sel_{name}"
         columns = [
-            f"{name}_count",
+            f"{prefix}_count",
         ]
         if not analyze_text:
             return columns
         columns += [
-            f"{name}_token_count",
-            f"{name}_unique_token_count",
-            f"{name}_non_stop_token_count",
-            f"{name}_non_stop_unique_token_count",
-            f"{name}_polarity",
-            f"{name}_subjectivity",
-            f"{name}_readability",
+            f"{prefix}_token_count",
+            f"{prefix}_unique_token_count",
+            f"{prefix}_non_stop_token_count",
+            f"{prefix}_non_stop_unique_token_count",
+            f"{prefix}_polarity",
+            f"{prefix}_subjectivity",
+            f"{prefix}_neg",
+            f"{prefix}_neu",
+            f"{prefix}_pos",
+            f"{prefix}_compound",
+            f"{prefix}_readability",
         ]
         return columns
