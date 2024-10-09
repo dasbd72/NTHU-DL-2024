@@ -2,6 +2,7 @@ import os
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 
@@ -29,34 +30,32 @@ def plot_auc(train_auc_list, val_auc_list, file_path=None):
 
 
 def plot_correlations(
-    X,
-    y,
+    X: pd.DataFrame,
+    y: np.ndarray,
     file_path=None,
     figsize=None,
     top_n=10,
     print_values=False,
-    progress_bar=False,
 ):
-    correlations = []
-    if progress_bar:
-        for i, column in tqdm(enumerate(X.columns)):
-            correlations.append((column, np.corrcoef(X.values[:, i], y)[0, 1]))
-    else:
-        for i in range(X.shape[1]):
-            correlations.append(
-                (X.columns[i], np.corrcoef(X.values[:, i], y)[0, 1])
-            )
-    correlations = sorted(correlations, key=lambda x: -abs(x[1]))[:top_n]
-    if print_values:
-        for c in correlations:
-            print(c)
-    plt.figure(figsize=figsize)
-    plt.barh(
-        range(len(correlations)),
-        [c[1] for c in reversed(correlations)],
-        tick_label=[c[0] for c in reversed(correlations)],
+    correlations = (
+        X.corrwith(pd.Series(y))
+        .sort_values(
+            ascending=False,
+            key=lambda x: np.abs(x),
+        )
+        .head(top_n)
     )
-    if file_path is not None:
+
+    if print_values:
+        print(correlations)
+
+    plt.figure(figsize=figsize)
+    plt.barh(correlations.index[::-1], correlations.values[::-1])
+
+    if file_path:
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         plt.savefig(file_path)
+
     plt.show()
+
+    return correlations
