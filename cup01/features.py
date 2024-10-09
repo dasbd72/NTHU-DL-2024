@@ -78,14 +78,14 @@ class Features(object):
     def extract_info(self):
         self.X_info_raw = self.extractor.extract(
             self.X_contents,
-            cache_path="./cache/train_extractor_cache_{}.csv".format(
+            cache_path="./cache/train_extractor_cache_{}.parquet".format(
                 preprocess.Extractor.DATA_VERSION
             ),
         )
         self.X_info = self.X_info_raw.copy(True)
         self.X_test_info_raw = self.extractor.extract(
             self.X_test_contents,
-            cache_path="./cache/test_extractor_cache_{}.csv".format(
+            cache_path="./cache/test_extractor_cache_{}.parquet".format(
                 preprocess.Extractor.DATA_VERSION
             ),
         )

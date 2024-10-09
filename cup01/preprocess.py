@@ -190,17 +190,44 @@ class Extractor(object):
         cache_path: Optional[str] = None,
     ):
         self.logger.info("Extracting features")
+        df = None
+        # Migrate from csv to parquet if parquet not found and csv found
+        if (
+            cache_path is not None
+            and cache_path.endswith(".parquet")
+            and not os.path.exists(cache_path)
+        ):
+            cache_path_csv = cache_path.replace(".parquet", ".csv")
+            if os.path.exists(cache_path_csv):
+                self.logger.info("Migrating from csv to parquet")
+                self.convert_csv_cache_to_parquet(cache_path_csv, cache_path)
+        # Load from cache
         if cache_path is not None:
-            if os.path.exists(cache_path):
-                self.logger.info("Found cache, loading")
-                df = pd.read_csv(cache_path)
-            else:
-                df = self._extract(arr, n_jobs=n_jobs)
-                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-                df.to_csv(cache_path, index=False)
-        else:
+            if cache_path.endswith(".csv"):
+                if os.path.exists(cache_path):
+                    self.logger.info("Found cache, loading")
+                    df = pd.read_csv(cache_path)
+            elif cache_path.endswith(".parquet"):
+                if os.path.exists(cache_path):
+                    self.logger.info("Found cache, loading")
+                    df = pd.read_parquet(cache_path)
+        # Extract
+        if df is None:
+            self.logger.info("Extracting features")
             df = self._extract(arr, n_jobs=n_jobs)
+        # Save to cache
+        if cache_path is not None:
+            if cache_path.endswith(".csv"):
+                df.to_csv(cache_path, index=False)
+            elif cache_path.endswith(".parquet"):
+                df.to_parquet(cache_path, index=False)
         return df
+
+    def convert_csv_cache_to_parquet(self, csv_path: str, parquet_path: str):
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(f"csv_path not found: {csv_path}")
+        df = pd.read_csv(csv_path)
+        df.to_parquet(parquet_path, index=False)
 
     def _extract(self, arr: List[str], n_jobs: Optional[int] = None):
         func = partial(self._extract_single)
