@@ -98,11 +98,11 @@ class Features(object):
         weekday_encoder.fit([[i] for i in range(7)])
 
         def process_weekday(df: pd.DataFrame) -> pd.DataFrame:
-            columns = ["weekday_{}".format(i) for i in range(7)]
+            columns = ["datetime_weekday_{}".format(i) for i in range(7)]
             onehot = weekday_encoder.transform(
-                df["weekday"].values.reshape(-1, 1)
+                df["datetime_weekday"].values.reshape(-1, 1)
             )
-            new_df = df.drop(columns=["weekday"])
+            new_df = df.drop(columns=["datetime_weekday"])
             for i, column in enumerate(columns):
                 new_df[column] = onehot[:, i]
             return new_df
@@ -117,9 +117,11 @@ class Features(object):
         month_encoder.fit([[i] for i in range(12)])
 
         def process_month(df: pd.DataFrame) -> pd.DataFrame:
-            columns = ["month_{}".format(i) for i in range(12)]
-            onehot = month_encoder.transform(df["month"].values.reshape(-1, 1))
-            new_df = df.drop(columns=["month"])
+            columns = ["datetime_month_{}".format(i) for i in range(12)]
+            onehot = month_encoder.transform(
+                df["datetime_month"].values.reshape(-1, 1)
+            )
+            new_df = df.drop(columns=["datetime_month"])
             for i, column in enumerate(columns):
                 new_df[column] = onehot[:, i]
             return new_df

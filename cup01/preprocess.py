@@ -155,7 +155,7 @@ class Tokenizer(object):
 
 
 class Extractor(object):
-    DATA_VERSION = "0.2"
+    DATA_VERSION = "0.3"
 
     def __init__(
         self,
@@ -278,13 +278,13 @@ class Extractor(object):
     def get_columns(self):
         column = []
         datetime_columns = [
-            "year",
-            "month",
-            "day",
-            "hour",
-            "minute",
-            "second",
-            "weekday",
+            "datetime_year",
+            "datetime_month",
+            "datetime_day",
+            "datetime_hour",
+            "datetime_minute",
+            "datetime_second",
+            "datetime_weekday",
         ]
         column += datetime_columns
 
