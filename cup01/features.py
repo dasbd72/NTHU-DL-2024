@@ -16,6 +16,8 @@ class Features(object):
         y: Optional[np.ndarray] = None,
         X_test_contents: Optional[np.ndarray] = None,
         extractor: Optional[preprocess.Extractor] = None,
+        onehot_weekday: bool = False,
+        onehot_month: bool = False,
         category_vectorize=False,
         category_max_features: Optional[int] = 1000,
         category_vectorizer=None,
@@ -41,6 +43,8 @@ class Features(object):
             self.extractor = extractor
         else:
             self.extractor = preprocess.Extractor()
+        self.onehot_weekday = onehot_weekday
+        self.onehot_month = onehot_month
         self.category_vectorize = category_vectorize
         self.category_max_features = category_max_features
         if (
@@ -91,43 +95,45 @@ class Features(object):
         )
         self.X_test_info = self.X_test_info_raw.copy(True)
 
-        # One-hot encode weekday
-        weekday_encoder = OneHotEncoder(
-            handle_unknown="ignore", sparse_output=False
-        )
-        weekday_encoder.fit([[i] for i in range(7)])
-
-        def process_weekday(df: pd.DataFrame) -> pd.DataFrame:
-            columns = ["datetime_weekday_{}".format(i) for i in range(7)]
-            onehot = weekday_encoder.transform(
-                df["datetime_weekday"].values.reshape(-1, 1)
+        if self.onehot_weekday:
+            # One-hot encode weekday
+            weekday_encoder = OneHotEncoder(
+                handle_unknown="ignore", sparse_output=False
             )
-            new_df = df.drop(columns=["datetime_weekday"])
-            for i, column in enumerate(columns):
-                new_df[column] = onehot[:, i]
-            return new_df
+            weekday_encoder.fit([[i] for i in range(7)])
 
-        self.X_info = process_weekday(self.X_info)
-        self.X_test_info = process_weekday(self.X_test_info)
+            def process_weekday(df: pd.DataFrame) -> pd.DataFrame:
+                columns = ["datetime_weekday_{}".format(i) for i in range(7)]
+                onehot = weekday_encoder.transform(
+                    df["datetime_weekday"].values.reshape(-1, 1)
+                )
+                new_df = df.drop(columns=["datetime_weekday"])
+                for i, column in enumerate(columns):
+                    new_df[column] = onehot[:, i]
+                return new_df
 
-        # One-hot encode month
-        month_encoder = OneHotEncoder(
-            handle_unknown="ignore", sparse_output=False
-        )
-        month_encoder.fit([[i] for i in range(12)])
+            self.X_info = process_weekday(self.X_info)
+            self.X_test_info = process_weekday(self.X_test_info)
 
-        def process_month(df: pd.DataFrame) -> pd.DataFrame:
-            columns = ["datetime_month_{}".format(i) for i in range(12)]
-            onehot = month_encoder.transform(
-                df["datetime_month"].values.reshape(-1, 1)
+        if self.onehot_month:
+            # One-hot encode month
+            month_encoder = OneHotEncoder(
+                handle_unknown="ignore", sparse_output=False
             )
-            new_df = df.drop(columns=["datetime_month"])
-            for i, column in enumerate(columns):
-                new_df[column] = onehot[:, i]
-            return new_df
+            month_encoder.fit([[i] for i in range(12)])
 
-        self.X_info = process_month(self.X_info)
-        self.X_test_info = process_month(self.X_test_info)
+            def process_month(df: pd.DataFrame) -> pd.DataFrame:
+                columns = ["datetime_month_{}".format(i) for i in range(12)]
+                onehot = month_encoder.transform(
+                    df["datetime_month"].values.reshape(-1, 1)
+                )
+                new_df = df.drop(columns=["datetime_month"])
+                for i, column in enumerate(columns):
+                    new_df[column] = onehot[:, i]
+                return new_df
+
+            self.X_info = process_month(self.X_info)
+            self.X_test_info = process_month(self.X_test_info)
 
         # One-hot encode channel
         common_channels = set(self.X_info["channel"].unique()).intersection(
