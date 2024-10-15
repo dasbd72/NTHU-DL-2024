@@ -254,7 +254,6 @@ class Extractor(object):
             "p",
             "a",
             "div",
-            "p",
             "section",
             "footer>a[href]",
         ]
@@ -300,7 +299,6 @@ class Extractor(object):
             "p",
             "a",
             "div",
-            "p",
             "section",
             "footer_a",
         ]
