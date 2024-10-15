@@ -165,6 +165,8 @@ class Extractor(object):
             self.logger = logger
         else:
             self.logger = logging.getLogger(__name__)
+            for handler in self.logger.handlers:
+                self.logger.removeHandler(handler)
             self.logger.setLevel(logging.INFO)
             stream_handler = logging.StreamHandler()
             stream_handler.setLevel(logging.INFO)
