@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 import numpy as np
@@ -12,9 +13,8 @@ from utils import do_or_load
 class Features(object):
     def __init__(
         self,
-        X_contents: Optional[np.ndarray] = None,
-        y: Optional[np.ndarray] = None,
-        X_test_contents: Optional[np.ndarray] = None,
+        train_path: str,
+        test_path: str,
         extractor: Optional[preprocess.Extractor] = None,
         onehot_weekday: bool = False,
         onehot_month: bool = False,
@@ -30,6 +30,13 @@ class Features(object):
         test_tokens_path: Optional[str] = None,
         tokenizer: Optional[preprocess.Tokenizer] = None,
     ):
+        # Load data
+        self.df_train = self.load(train_path)
+        self.df_test = self.load(test_path)
+        X_contents = self.df_train["Page content"].values
+        y = np.where(self.df_train["Popularity"].values > 0, 1, 0)
+        X_test_contents = self.df_test["Page content"].values
+
         # Input data
         self.X_contents = X_contents
         if y is not None:
@@ -78,6 +85,18 @@ class Features(object):
             test_tokens_path,
             tokenizer,
         )
+
+    def load(self, path: str):
+        if not os.path.exists(path):
+            raise ValueError("file path does not exist")
+        if path.endswith(".parquet"):
+            df = pd.read_parquet(path)
+        elif path.endswith(".csv"):
+            df = pd.read_csv(path)
+        else:
+            raise ValueError("file path must be parquet or csv")
+
+        return df
 
     def extract_info(self):
         self.X_info_raw = self.extractor.extract(
