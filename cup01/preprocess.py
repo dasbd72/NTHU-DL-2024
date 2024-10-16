@@ -155,7 +155,7 @@ class Tokenizer(object):
 
 
 class Extractor(object):
-    DATA_VERSION = "0.3"
+    DATA_VERSION = "0.4"
 
     def __init__(
         self,
@@ -249,6 +249,7 @@ class Extractor(object):
         info += self._extract_categories(soup)
         # Extract by selector
         text_selectors = [
+            "html",
             "h1",
             "h2",
             "p",
@@ -294,6 +295,7 @@ class Extractor(object):
         column += categories_columns
 
         text_selector_names = [
+            "html",
             "h1",
             "h2",
             "p",
