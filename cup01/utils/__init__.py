@@ -3,7 +3,8 @@ import pickle
 
 from .logging import test_mlflow_connection
 from .plotting import plot_auc, plot_correlations
-from .training import cross_validate, get_batches
+from .selecting import mlflow_cross_validate
+from .training import get_batches
 
 
 def dummy(doc):
