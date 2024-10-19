@@ -1,0 +1,2 @@
+output/*
+!output/fig-adaline-sgd-cost.png
