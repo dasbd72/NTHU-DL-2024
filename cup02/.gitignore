@@ -2,3 +2,4 @@ data/*
 output/*
 cache/*
 mlruns/*
+ckpts/*
