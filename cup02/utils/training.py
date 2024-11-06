@@ -2,8 +2,16 @@ import os
 import torch
 
 
-# Function to save checkpoint
 def save_checkpoint(epoch, model, optimizer, checkpoint_dir, checkpoint_name):
+    """
+    Save a checkpoint to a specified directory.
+
+    :param epoch: The epoch number to save in the checkpoint.
+    :param model: The model to save in the checkpoint.
+    :param optimizer: The optimizer to save in the checkpoint.
+    :param checkpoint_dir: The directory to save the checkpoint in.
+    :param checkpoint_name: The name of the checkpoint file, will be appended with the epoch number.
+    """
     checkpoint_path = os.path.join(
         checkpoint_dir, f"{checkpoint_name}_{epoch:03d}.pt"
     )
@@ -18,10 +26,19 @@ def save_checkpoint(epoch, model, optimizer, checkpoint_dir, checkpoint_name):
     print(f"Saved checkpoint for epoch {epoch} at {checkpoint_path}")
 
 
-# Function to load checkpoint
 def load_checkpoint(
     model, checkpoint_dir, checkpoint_name, optimizer=None, epoch=None
 ):
+    """
+    Load a checkpoint from a specified directory.
+
+    :param model: The model to load the checkpoint into.
+    :param checkpoint_dir: The directory to search for the checkpoint.
+    :param checkpoint_name: The name of the checkpoint file, will be appended with the epoch number.
+    :param optimizer: The optimizer to load the checkpoint into. If None, the optimizer is not loaded.
+    :param epoch: The epoch to load the checkpoint from. If None, the latest checkpoint is loaded.
+    If no checkpoint is found, the function prints a message and returns.
+    """
     if epoch is None:
         # Search for the latest checkpoint
         files = os.listdir(checkpoint_dir)
