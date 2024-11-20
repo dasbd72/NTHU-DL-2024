@@ -1,4 +1,5 @@
 import os
+
 import torch
 
 
@@ -27,8 +28,13 @@ def save_checkpoint(epoch, model, optimizer, checkpoint_dir, checkpoint_name):
 
 
 def load_checkpoint(
-    model, checkpoint_dir, checkpoint_name, optimizer=None, epoch=None
-):
+    model,
+    checkpoint_dir,
+    checkpoint_name,
+    optimizer=None,
+    epoch=None,
+    device=None,
+) -> bool:
     """
     Load a checkpoint from a specified directory.
 
@@ -49,7 +55,7 @@ def load_checkpoint(
         ]
         if not files:
             print("No checkpoint found.")
-            return
+            return False
         files.sort()
         checkpoint_path = os.path.join(checkpoint_dir, files[-1])
     else:
@@ -58,9 +64,12 @@ def load_checkpoint(
         )
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint for epoch {epoch} not found.")
-        return
-    checkpoint = torch.load(checkpoint_path, weights_only=False)
+        return False
+    checkpoint = torch.load(
+        checkpoint_path, weights_only=False, map_location=device
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     print(f"Loaded checkpoint from {checkpoint_path}")
+    return True

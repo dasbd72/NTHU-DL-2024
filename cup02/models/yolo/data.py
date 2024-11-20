@@ -31,6 +31,8 @@ class TrainDatasetGenerator(Dataset):
             for line in input_file:
                 line = line.strip()
                 ss = line.split(" ")
+                if len(ss) < 6:
+                    continue
                 self.image_names.append(ss[0])
                 self.record_list.append([float(num) for num in ss[1:]])
                 self.object_num_list.append(
@@ -228,6 +230,8 @@ class AugmentedTrainDatasetGenerator(Dataset):
             for line in input_file:
                 line = line.strip()
                 ss = line.split(" ")
+                if len(ss) < 6:
+                    continue
                 self.image_names.append(ss[0])
                 self.record_list.append([float(num) for num in ss[1:]])
                 self.object_num_list.append(
