@@ -1,2 +1,4 @@
 /datasets/*
 /ckpts/*
+/outputs/*
+/nsys-reports/*
