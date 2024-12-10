@@ -65,4 +65,5 @@ def load_checkpoint(
     state_dict = torch.load(
         checkpoint_path, weights_only=False, map_location=device
     )
+    print(f"Loaded checkpoint for epoch {epoch} from {checkpoint_path}")
     return state_dict
