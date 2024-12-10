@@ -18,7 +18,6 @@ from tqdm import tqdm
 from .config import DiffusionModelConfig, VAEModelConfig
 from .ddim import DDIMSampler
 from .ddpm import DDPMSampler
-from .ema import EMAStateDict
 from .modules import Diffusion, FrozenOpenCLIPEmbedder, VAEDecoder, VAEEncoder
 
 
@@ -294,11 +293,15 @@ class DiffusionModel:
         ).to(cfg.device)
 
         if cfg.ema_enabled:
-            self.diffusion_ema = EMAStateDict(
-                state_dict=self.diffusion.state_dict(),
-                decay=cfg.ema_decay,
-                device=cfg.device,
-            )
+            self.diffusion_ema = Diffusion(
+                latent_dim=3,
+                context_dim=cfg.context_dim,
+                hidden_context_dim=cfg.hidden_context_dim,
+                time_dim=cfg.time_dim,
+                num_heads=cfg.num_heads,
+                unet_scale=cfg.unet_scale,
+            ).to(cfg.device)
+            self.diffusion_ema.load_state_dict(self.diffusion.state_dict())
         else:
             self.diffusion_ema = None
 
@@ -427,15 +430,7 @@ class DiffusionModel:
         sampler = self.get_sampler(num_steps)
 
         if self.cfg.ema_enabled:
-            diffusion = Diffusion(
-                latent_dim=3,
-                context_dim=self.cfg.context_dim,
-                hidden_context_dim=self.cfg.hidden_context_dim,
-                time_dim=self.cfg.time_dim,
-                num_heads=self.cfg.num_heads,
-                unet_scale=self.cfg.unet_scale,
-            ).to(self.cfg.device)
-            diffusion.load_state_dict(self.diffusion_ema.state_dict())
+            diffusion = self.diffusion_ema
         else:
             diffusion = self.diffusion
         diffusion.eval()
@@ -611,9 +606,15 @@ class DiffusionModel:
             return
 
         if self.cfg.distributed:
-            self.diffusion_ema.update(self.diffusion.module.state_dict())
+            diffusion = self.diffusion.module
         else:
-            self.diffusion_ema.update(self.diffusion.state_dict())
+            diffusion = self.diffusion
+        for ema_param, param in zip(
+            self.diffusion_ema.parameters(), diffusion.parameters()
+        ):
+            ema_param.data.mul_(self.cfg.ema_decay).add_(
+                param.data, alpha=1 - self.cfg.ema_decay
+            )
 
     @torch.no_grad()
     def test_step(self, images: torch.Tensor, prompts: List[str]):
@@ -661,8 +662,12 @@ class DiffusionModel:
                 self.cfg.device
             )  # (batch_size, time_dim)
 
-            self.diffusion.eval()
-            pred_noises = self.diffusion(
+            if self.cfg.ema_enabled:
+                diffusion = self.diffusion_ema
+            else:
+                diffusion = self.diffusion
+            diffusion.eval()
+            pred_noises = diffusion(
                 noisy_images, context, time_embedding
             )  # (batch_size, 3, h, w)
             pred_images, _ = self.sampler.denoise(
@@ -707,9 +712,10 @@ class DiffusionModel:
         """
         self.optimizer.load_state_dict(checkpoint["optimizer"])
         if self.cfg.distributed:
-            self.diffusion.module.load_state_dict(checkpoint["diffusion"])
+            diffusion = self.diffusion.module
         else:
-            self.diffusion.load_state_dict(checkpoint["diffusion"])
+            diffusion = self.diffusion
+        diffusion.load_state_dict(checkpoint["diffusion"])
         if self.cfg.ema_enabled:
             self.diffusion_ema.load_state_dict(checkpoint["diffusion_ema"])
 
