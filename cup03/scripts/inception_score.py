@@ -215,8 +215,12 @@ def main(args):
     i_score = inception_score(infer_pred)
     score = sim_score + 0.5 * (1 / i_score)
 
-    avg_score = sum(score) / len(score)
-    print("Average score: ", avg_score)
+    print(
+        "Average cosine similarity (smaller is better): ",
+        sum(sim_score) / len(sim_score),
+    )
+    print("Inception score (larger is better): ", i_score)
+    print("Average score (smaller is better): ", sum(score) / len(score))
 
     # write output file
     idx = [i for i in range(len(score))]
