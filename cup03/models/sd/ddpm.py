@@ -1,0 +1,197 @@
+from typing import Optional, Tuple, Union
+
+import torch
+
+
+class DDPMSampler:
+    def __init__(
+        self,
+        generator: Optional[torch.Generator] = None,
+        num_steps: int = 50,
+        max_num_steps: int = 1000,
+        beta_start: float = 0.00085,
+        beta_end: float = 0.0120,
+        device: str = "cuda",
+    ):
+        # Params "beta_start" and "beta_end" taken from: https://github.com/CompVis/stable-diffusion/blob/21f890f9da3cfbeaba8e2ac3c425ee9e998d5229/configs/stable-diffusion/v1-inference.yaml#L5C8-L5C8
+        # For the naming conventions, refer to the DDPM paper (https://arxiv.org/pdf/2006.11239.pdf)
+        self.generator = generator
+        self.num_steps = num_steps
+        self.max_num_steps = max_num_steps
+
+        self.betas = (
+            torch.linspace(
+                beta_start**0.5,
+                beta_end**0.5,
+                max_num_steps,
+                dtype=torch.float32,
+                device=device,
+            )
+            ** 2
+        )  # (max_num_steps,)
+        self.alphas = 1.0 - self.betas  # (max_num_steps,)
+        self.alphas_cumprod = torch.cumprod(
+            self.alphas, dim=0
+        )  # (max_num_steps,)
+        self.stride = self.max_num_steps // self.num_steps
+
+    @torch.no_grad()
+    def sample_noise(
+        self,
+        shape: Tuple[int, int, int, int],
+        device: Union[str, torch.device] = "cuda",
+        dtype=torch.float32,
+    ) -> torch.FloatTensor:
+        """
+        :param shape Tuple[int, int, int, int]: The shape of the noise tensor, (batch_size, latent_dim, h, w)
+        :param device Union[str, torch.device]: The device to create the noise tensor on
+        :param dtype torch.dtype: The data type of the noise tensor
+        :return torch.FloatTensor: The noise tensor, shape (batch_size, latent_dim, h, w)
+        """
+        noise = torch.randn(
+            shape,
+            generator=self.generator,
+            dtype=dtype,
+            device=device,
+        )
+        return noise
+
+    @torch.no_grad()
+    def add_noise(
+        self,
+        steps: torch.IntTensor,
+        latents: torch.FloatTensor,
+        noise: torch.FloatTensor,
+    ):
+        """
+        Add noise to the latents at the given steps.
+
+        Code according to the DDMP paper.
+
+        :param steps torch.IntTensor: The steps to add noise at, shape (batch_size,)
+        :param latents torch.FloatTensor: The latents tensor of shape (batch_size, latent_dim, h, w)
+        :param noise torch.FloatTensor: The noise tensor of shape (batch_size, latent_dim, h, w)
+        :return torch.FloatTensor: The noisy latents tensor
+        """
+        assert torch.all(
+            (0 <= steps) & (steps < self.num_steps)
+        ), "steps must be in the range [0, num_steps)"
+
+        dtype = latents.dtype
+        device = latents.device
+
+        # Scale the steps to the range [0, max_num_steps)
+        steps = steps * self.stride
+
+        alphas_cumprod = self.alphas_cumprod.to(device, dtype)
+        steps = steps.to(device)
+
+        sqrt_alphas_cumprod = alphas_cumprod[steps].sqrt()
+        sqrt_alphas_cumprod = sqrt_alphas_cumprod.view(
+            -1, 1, 1, 1
+        )  # (batch_size, 1, 1, 1)
+
+        sqrt_one_minus_alphas_cumprod = (
+            1 - alphas_cumprod[steps]
+        ).sqrt()  # stddev
+        sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.view(
+            -1, 1, 1, 1
+        )  # (batch_size, 1, 1, 1)
+
+        noisy_latents = (
+            sqrt_alphas_cumprod * latents
+            + sqrt_one_minus_alphas_cumprod * noise
+        )
+        return noisy_latents
+
+    @torch.no_grad()
+    def denoise(
+        self,
+        steps: torch.IntTensor,
+        latents: torch.FloatTensor,
+        noice: torch.FloatTensor,
+    ):
+        """
+        Denoise the latents at the given step.
+
+        Code according to the DDMP paper.
+
+        :param steps torch.IntTensor: The steps to denoise at, shape (batch_size,)
+        :param latents torch.FloatTensor: The latents tensor of shape (batch_size, latent_dim, h, w)
+        :param noice torch.FloatTensor: The output tensor of shape (batch_size, latent_dim, h, w)
+        :return torch.FloatTensor: The denoised latents tensor, shape (batch_size, latent_dim, h, w)
+        :return Tuple[torch.FloatTensor, torch.FloatTensor]: The predicted original latent and the predicted noisy latents,
+            shape (batch_size, latent_dim, h, w).
+        """
+        if not torch.all((0 <= steps) & (steps < self.num_steps)):
+            raise ValueError(
+                f"steps must be in the range [0, {self.num_steps})"
+            )
+
+        dtype = latents.dtype
+        device = latents.device
+
+        # Scale the steps to the range [0, max_num_steps)
+        prev_step = (steps - 1) * self.stride  # (batch_size,)
+        steps = steps * self.stride  # (batch_size,)
+
+        # 1. compute alphas, betas
+        alpha_cumprod = self.alphas_cumprod[steps]  # (batch_size,)
+        prev_alphas_cumprod = torch.where(
+            prev_step >= 0,
+            self.alphas_cumprod[
+                torch.clamp(prev_step, min=0, max=self.max_num_steps - 1)
+            ],
+            torch.ones_like(alpha_cumprod, device=device, dtype=dtype),
+        )  # (batch_size,)
+        alpha_cumprod = alpha_cumprod.view(
+            -1, 1, 1, 1
+        )  # (batch_size, 1, 1, 1)
+        prev_alphas_cumprod = prev_alphas_cumprod.view(
+            -1, 1, 1, 1
+        )  # (batch_size, 1, 1, 1)
+        beta_cumprod = 1 - alpha_cumprod  # (batch_size, 1, 1, 1)
+        prev_beta_cumprod = 1 - prev_alphas_cumprod  # (batch_size, 1, 1, 1)
+        alpha = alpha_cumprod / prev_alphas_cumprod  # (batch_size, 1, 1, 1)
+        beta = 1 - alpha  # (batch_size, 1, 1, 1)
+
+        # 2. compute predicted original sample from predicted noise also called
+        # "predicted x_0" of formula (15) from https://arxiv.org/pdf/2006.11239.pdf
+        pred_original_sample = (latents - (beta_cumprod**0.5) * noice) / (
+            alpha_cumprod**0.5
+        )  # (batch_size, latent_dim, h, w)
+
+        # 3. Compute coefficients for pred_original_sample x_0 and current sample x_t
+        # See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
+        pred_original_sample_coeff = (
+            (prev_alphas_cumprod**0.5) * beta
+        ) / beta_cumprod
+        sample_coeff = (alpha**0.5) * prev_beta_cumprod / beta_cumprod
+
+        # 4. Compute the new sample
+        # See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
+        pred_prev_sample = (
+            pred_original_sample_coeff * pred_original_sample
+            + sample_coeff * latents
+        )  # Mean, (batch_size, latent_dim, h, w)
+
+        # 5. Add noise to the new sample
+        noise = self.sample_noise(latents.shape, device=device, dtype=dtype)
+        # For t > 0, compute predicted variance βt (see formula (6) and (7) from https://arxiv.org/pdf/2006.11239.pdf)
+        # and sample from it to get previous sample
+        # x_{t-1} ~ N(pred_prev_sample, variance) == add variance to pred_sample
+        variance = (
+            prev_beta_cumprod / beta_cumprod * beta
+        )  # (batch_size, 1, 1, 1)
+        variance = torch.clamp(variance, min=1e-20)
+        variance = torch.where(
+            (steps > 0).view(-1, 1, 1, 1),
+            variance.sqrt(),
+            torch.zeros_like(variance, device=device, dtype=dtype),
+        )  # (batch_size, 1, 1, 1)
+        variance = variance * noise  # (batch_size, latent_dim, h, w)
+
+        pred_prev_sample = (
+            pred_prev_sample + variance
+        )  # (batch_size, latent_dim, h, w)
+        return pred_original_sample, pred_prev_sample

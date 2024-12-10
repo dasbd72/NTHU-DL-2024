@@ -1,0 +1,16 @@
+# Linting
+flake8
+isort
+black
+ipykernel==6.29.5
+ipywidgets==8.1.5
+scikit-learn==1.5.2
+nbconvert
+# Torch + Xformers
+# pip3 install torch torchvision torchaudio xformers --upgrade --force-reinstall --index-url https://download.pytorch.org/whl/cu121
+torchview==0.2.6
+torchmetrics[image]==1.5.2
+# Huggingface
+# open_clip_torch==2.29.0 # Mask error
+open_clip_torch==2.24.0
+huggingface-hub==0.26.3

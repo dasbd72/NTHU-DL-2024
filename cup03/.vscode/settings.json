@@ -1,0 +1,8 @@
+{
+    "files.readonlyInclude": {
+        "**/.cache/**": true,
+        "**/dataset/**": true,
+        "**/ckpts/**": true,
+        "**/logs/**": true,
+    },
+}
