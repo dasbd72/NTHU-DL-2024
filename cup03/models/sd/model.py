@@ -12,6 +12,7 @@ from IPython import get_ipython
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torchmetrics.image.fid import FrechetInceptionDistance
+from torchmetrics.image.inception import InceptionScore
 from tqdm import tqdm
 
 from .config import DiffusionModelConfig, VAEModelConfig
@@ -323,6 +324,7 @@ class DiffusionModel:
             feature=64,
             input_img_size=(3, cfg.image_height, cfg.image_width),
         ).to(cfg.device)
+        self.inception = InceptionScore(feature=64).to(cfg.device)
 
     def get_sampler(self, num_steps: int):
         """
@@ -381,8 +383,22 @@ class DiffusionModel:
         images = images.to(torch.uint8)
         self.fid.update(pred_images, real=False)
         self.fid.update(images, real=True)
-        fid = self.fid.compute()
-        return fid
+        fid_score = self.fid.compute()
+        return fid_score
+
+    def compute_is_score(self, images: torch.Tensor):
+        """
+        Compute the Inception Score (IS) of the images.
+
+        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
+        :return torch.Tensor: The IS value
+        """
+        self.inception.reset()
+        images = self.denormalize(images) * 255
+        images = images.to(torch.uint8)
+        self.inception.update(images)
+        is_score = self.inception.compute()  # (mean, std)
+        return is_score[0]
 
     @torch.no_grad()
     def generate(
@@ -594,7 +610,10 @@ class DiffusionModel:
         if not self.cfg.ema_enabled:
             return
 
-        self.diffusion_ema.update(self.diffusion.state_dict())
+        if self.cfg.distributed:
+            self.diffusion_ema.update(self.diffusion.module.state_dict())
+        else:
+            self.diffusion_ema.update(self.diffusion.state_dict())
 
     @torch.no_grad()
     def test_step(self, images: torch.Tensor, prompts: List[str]):
@@ -652,12 +671,14 @@ class DiffusionModel:
 
             noise_loss = self.loss_func(pred_noises, noise)
             image_loss = self.loss_func(pred_images, images)
-            fid = self.compute_fid(pred_images, images)
+            fid_score = self.compute_fid(pred_images, images)
+            is_score = self.compute_is_score(images)
 
         return {
             "noise_loss": noise_loss.item(),
             "image_loss": image_loss.item(),
-            "fid": fid.item(),
+            "fid_score": fid_score.item(),
+            "is_score": is_score.item(),
         }
 
     @torch.no_grad()
