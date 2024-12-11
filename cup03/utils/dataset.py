@@ -1,6 +1,7 @@
 import os
+import random
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Union
 
 import numpy as np
 import pandas as pd
@@ -32,7 +33,7 @@ class Text2ImgDataset(Dataset):
         self.split = split
 
         # One string of caption per image
-        self.captions: list[str] = []
+        self.captions: Union[list[str], list[list[str]]] = []
         if split in ["train", "val"]:
             self.image_paths: list[str] = []
         if split in ["test"]:
@@ -41,8 +42,8 @@ class Text2ImgDataset(Dataset):
             if split in ["train", "val"]:
                 captions = row["Captions"]
                 image_path = row["ImagePath"]
-                self.captions.extend(captions)
-                self.image_paths.extend([image_path] * len(captions))
+                self.captions.append(captions)
+                self.image_paths.append(image_path)
             elif split in ["test"]:
                 index = row["ID"]
                 caption = row["Captions"]
@@ -54,7 +55,8 @@ class Text2ImgDataset(Dataset):
 
     def __getitem__(self, idx) -> tuple[torch.Tensor, str]:
         if self.split in ["train", "val"]:
-            caption = self.captions[idx]
+            captions = self.captions[idx]
+            caption = random.choice(captions)
             image_path = self.image_paths[idx]
 
             image = Image.open(image_path).convert("RGB")
@@ -131,7 +133,6 @@ class DatasetTool:
             [
                 transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
                 transforms.RandomHorizontalFlip(),
-                transforms.RandomAdjustSharpness(2),
                 transforms.ToTensor(),
             ]
         )
