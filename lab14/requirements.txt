@@ -1,0 +1,4 @@
+ipykernel==6.29.5
+matplotlib==3.9.3
+moviepy<2.0.0
+pygame==2.6.1
