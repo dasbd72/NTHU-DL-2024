@@ -771,16 +771,28 @@ class DiffusionModel:
                 idx = row * num_cols + col
                 plt.subplot(num_rows, num_cols, idx + 1)
                 plt.imshow(generated_images[idx])
+                plt.title(idx)
                 plt.axis("off")
         plt.tight_layout()
 
         # Choose to show or save the images
         if ipy is not None:
             plt.show()
+            for i, prompt in enumerate(prompts):
+                self.logger.info(f"Prompt {i}: {prompt}")
         if save:
             os.makedirs(output_dir, exist_ok=True)
-            filename = "img.png" if epoch is None else f"img_epoch{epoch}.png"
-            filepath = os.path.join(output_dir, filename)
-            plt.savefig(filepath)
-            self.logger.info(f"Saved generated images at {filepath}")
+            image_name = (
+                "img.png" if epoch is None else f"img_epoch{epoch}.png"
+            )
+            image_path = os.path.join(output_dir, image_name)
+            prompt_name = (
+                "prompts.txt" if epoch is None else f"prompts_epoch{epoch}.txt"
+            )
+            prompt_path = os.path.join(output_dir, prompt_name)
+            plt.savefig(image_path)
+            with open(prompt_path, "w") as f:
+                for i, prompt in enumerate(prompts):
+                    f.write(f"{i:03d}, {prompt}\n")
+            self.logger.info(f"Saved generated images at {image_path}")
         plt.close()
