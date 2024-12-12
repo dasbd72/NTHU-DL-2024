@@ -1,5 +1,6 @@
 import logging
 import os
+from abc import abstractmethod
 from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
@@ -13,250 +14,51 @@ from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torchmetrics.image.fid import FrechetInceptionDistance
 from torchmetrics.image.inception import InceptionScore
+from torchvision import models
 from tqdm import tqdm
 
-from .config import DiffusionModelConfig, VAEModelConfig
+from .config import BaseModelConfig, DiffusionModelConfig, VAEModelConfig
 from .ddim import DDIMSampler
 from .ddpm import DDPMSampler
-from .modules import Diffusion, FrozenOpenCLIPEmbedder, VAEDecoder, VAEEncoder
+from .modules import (
+    Diffusion,
+    FrozenOpenCLIPEmbedder,
+    VAEDecoder,
+    VAEEncoder,
+    VAEReparametrizer,
+)
 
 
-class VAEModel:
+class FPExtractor(nn.Module):
+    """
+    Feature Perceptual Extractor
+    """
+
+    def __init__(self):
+
+        super(FPExtractor, self).__init__()
+
+        self.feature = models.vgg16(
+            weights=models.VGG16_Weights.DEFAULT
+        ).features[:23]
+
+        # Freeze the model
+        for param in self.feature.parameters():
+            param.requires_grad = False
+
+    def forward(self, x: torch.Tensor):
+        """
+        :param x torch.Tensor: (batch_size, 3, h, w)
+        :param target torch.Tensor: (batch_size, 512, h//4, w//4)
+        """
+        x = self.feature(x)
+        return x
+
+
+class BaseModel:
     def __init__(
         self,
-        cfg: VAEModelConfig,
-    ):
-        self.cfg = cfg
-        self.encoder = (
-            VAEEncoder(
-                input_channels=3,
-                num_heads=cfg.num_heads,
-                latent_dim=cfg.latent_dim,
-                scale=cfg.vae_scale,
-            )
-            .to(cfg.device)
-            .train()
-        )
-        self.decoder = (
-            VAEDecoder(
-                output_channels=3,
-                num_heads=cfg.num_heads,
-                latent_dim=cfg.latent_dim,
-                scale=cfg.vae_scale,
-            )
-            .to(cfg.device)
-            .train()
-        )
-
-        self.optimizer = optim.Adam(
-            [
-                *self.encoder.parameters(),
-                *self.decoder.parameters(),
-            ],
-            lr=cfg.learning_rate,
-            weight_decay=cfg.weight_decay,
-        )
-
-        if cfg.mixed_precision:
-            self.scaler = GradScaler(cfg.device_type)
-        else:
-            self.scaler = None
-
-    def generate(
-        self,
-        images: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Generate images from the given images.
-
-        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
-        :return torch.Tensor: The generated images tensor of shape (batch_size, 3, h, w)
-        """
-        images = images.to(self.cfg.device)
-        latents = self.encoder(images)
-        pred_images = self.decoder(latents)
-        pred_images = torch.clamp(
-            pred_images, self.cfg.image_range[0], self.cfg.image_range[1]
-        )
-        return pred_images
-
-    def compute_loss(
-        self,
-        images: torch.Tensor,
-        pred_images: torch.Tensor,
-        mean: torch.Tensor,
-        log_variance: torch.Tensor,
-    ):
-        image_loss = F.mse_loss(pred_images, images)
-
-        # KL divergence
-        # Clamp the log variance to avoid numerical instability
-        log_variance = torch.clamp(log_variance, -30, 20)
-        kl_loss = -0.5 * torch.sum(
-            1 + log_variance - mean.pow(2) - log_variance.exp(), dim=(1, 2, 3)
-        )
-        kl_loss = kl_loss.mean()
-
-        loss = image_loss + self.cfg.vae_beta * kl_loss
-        return loss
-
-    def train_step(self, images: torch.Tensor):
-        """
-        Perform a training step.
-
-        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
-        :return Dict[str, torch.Tensor]: The metrics dictionary
-        """
-        with autocast(
-            self.cfg.device_type,
-            enabled=self.cfg.mixed_precision,
-        ):
-            images = images.to(self.cfg.device)
-            mean, log_variance = self.encoder.encode(images)
-            latents = self.encoder.reparametrize(mean, log_variance)
-            pred_images = self.decoder(latents)
-
-            loss = self.compute_loss(images, pred_images, mean, log_variance)
-
-        # Backward pass
-        self.optimizer.zero_grad()
-        if self.cfg.mixed_precision:
-            self.scaler.scale(loss).backward()
-            self.clip_grad_norm()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-        else:
-            loss.backward()
-            self.clip_grad_norm()
-            self.optimizer.step()
-
-        return {
-            "loss": loss.item(),
-        }
-
-    def clip_grad_norm(self, max_norm: float = 1.0):
-        """
-        Clip the gradient norms of the model.
-
-        :param max_norm float: The maximum norm value
-        """
-        torch.nn.utils.clip_grad_norm_(
-            self.encoder.parameters(), max_norm=max_norm
-        )
-        torch.nn.utils.clip_grad_norm_(
-            self.decoder.parameters(), max_norm=max_norm
-        )
-
-    @torch.no_grad()
-    def test_step(self, images: torch.Tensor):
-        """
-        Perform a testing step.
-
-        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
-        :return Dict[str, torch.Tensor]: The metrics dictionary
-        """
-        images = images.to(self.cfg.device)
-        with autocast(
-            self.cfg.device_type,
-            enabled=self.cfg.mixed_precision,
-        ):
-            mean, log_variance = self.encoder.encode(images)
-            latents = self.encoder.reparametrize(mean, log_variance)
-            pred_images = self.decoder(latents)
-
-            loss = self.compute_loss(images, pred_images, mean, log_variance)
-        return {
-            "loss": loss.item(),
-        }
-
-    @torch.no_grad()
-    def checkpoint(self) -> Dict[str, Dict[str, nn.Parameter]]:
-        """
-        Get the state dictionary of the model.
-
-        :return Dict[str, Dict[str, nn.Parameter]]: The state dictionary
-        """
-        checkpoint = {"optimizer": self.optimizer.state_dict()}
-        checkpoint["encoder"] = self.encoder.state_dict()
-        checkpoint["decoder"] = self.decoder.state_dict()
-        return checkpoint
-
-    @torch.no_grad()
-    def load_checkpoint(self, checkpoint: Dict[str, Dict[str, nn.Parameter]]):
-        """
-        Set the state dictionary of the model.
-
-        :param checkpoint Dict[str, Dict[str, nn.Parameter]]: The state dictionary
-        """
-        self.optimizer.load_state_dict(checkpoint["optimizer"])
-        self.encoder.load_state_dict(checkpoint["encoder"])
-        self.decoder.load_state_dict(checkpoint["decoder"])
-
-    @torch.no_grad()
-    def plot_images(
-        self,
-        images: torch.Tensor,
-        num_rows=1,
-        num_cols=6,
-        save=False,
-        output_dir="outputs",
-        epoch=None,
-    ):
-        """
-        Plot the images in notebook or save them to the output directory with format `img_epoch{epoch}.png`.
-
-        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
-        :param num_rows int: The number of rows
-        :param num_cols int: The number of columns
-        :param save bool: Whether to save the images
-        :param output_dir str: The output directory
-        :param epoch Optional[int]: The epoch number
-        """
-        ipy = get_ipython()
-        if ipy is None and not save:
-            return
-
-        with autocast(self.cfg.device_type, enabled=self.cfg.mixed_precision):
-            pred_images = self.generate(images)
-        # To float32
-        images = images.detach().cpu().permute(0, 2, 3, 1).numpy()
-        pred_images = (
-            pred_images.detach()
-            .cpu()
-            .permute(0, 2, 3, 1)
-            .numpy()
-            .astype(np.float32)
-        )
-
-        plt.figure(figsize=(num_cols * 2.0, num_rows * 4.0))
-        for row in range(num_rows):
-            for col in range(num_cols):
-                idx = row * 2 * num_cols + col
-                if idx >= images.shape[0]:
-                    continue
-                plt.subplot(2 * num_rows, num_cols, idx + 1)
-                plt.imshow(images[idx])
-                plt.axis("off")
-                plt.subplot(2 * num_rows, num_cols, idx + 1 + num_cols)
-                plt.imshow(pred_images[idx])
-                plt.axis("off")
-        plt.tight_layout()
-
-        # Choose to show or save the images
-        if ipy is not None:
-            plt.show()
-        if save:
-            os.makedirs(output_dir, exist_ok=True)
-            filename = "img.png" if epoch is None else f"img_epoch{epoch}.png"
-            plt.savefig(os.path.join(output_dir, filename))
-            print("Saved generated images at", output_dir)
-        plt.close()
-
-
-class DiffusionModel:
-    def __init__(
-        self,
-        cfg: DiffusionModelConfig,
+        cfg: BaseModelConfig,
         logger: Optional[logging.Logger] = None,
     ):
         self.cfg = cfg
@@ -278,80 +80,11 @@ class DiffusionModel:
             device=cfg.device,
         ).view(1, 3, 1, 1)
 
-        self.sampler = self.get_sampler(cfg.max_num_steps)
-        self.clip = FrozenOpenCLIPEmbedder(
-            precision=cfg.clip_precision,
-            device=cfg.device,
-        )
-        self.diffusion = Diffusion(
-            latent_dim=3,
-            context_dim=cfg.context_dim,
-            hidden_context_dim=cfg.hidden_context_dim,
-            time_dim=cfg.time_dim,
-            num_heads=cfg.num_heads,
-            unet_scale=cfg.unet_scale,
-        ).to(cfg.device)
-
-        if cfg.ema_enabled:
-            self.diffusion_ema = Diffusion(
-                latent_dim=3,
-                context_dim=cfg.context_dim,
-                hidden_context_dim=cfg.hidden_context_dim,
-                time_dim=cfg.time_dim,
-                num_heads=cfg.num_heads,
-                unet_scale=cfg.unet_scale,
-            ).to(cfg.device)
-            self.diffusion_ema.load_state_dict(self.diffusion.state_dict())
-        else:
-            self.diffusion_ema = None
-
-        if cfg.distributed:
-            self.diffusion = DDP(
-                self.diffusion,
-                device_ids=[cfg.device_ids[cfg.local_rank]],
-            )
-
-        self.loss_func = nn.MSELoss()
-        self.optimizer = optim.Adam(
-            self.diffusion.parameters(),
-            lr=cfg.learning_rate,
-            weight_decay=cfg.weight_decay,
-        )
-
-        if cfg.mixed_precision:
-            self.scaler = GradScaler(cfg.device_type)
-        else:
-            self.scaler = None
-
         self.fid = FrechetInceptionDistance(
             feature=64,
             input_img_size=(3, cfg.image_height, cfg.image_width),
         ).to(cfg.device)
         self.inception = InceptionScore(feature=64).to(cfg.device)
-
-    def get_sampler(self, num_steps: int):
-        """
-        Get the sampler for the given number of steps.
-
-        :param num_steps int: The number of steps
-        :return Sampler: The sampler
-        """
-        if self.cfg.sampler_type == "ddpm":
-            return DDPMSampler(
-                num_steps=num_steps,
-                max_num_steps=self.cfg.max_num_steps,
-                device=self.cfg.device,
-            )
-        elif self.cfg.sampler_type == "ddim":
-            return DDIMSampler(
-                num_steps=num_steps,
-                max_num_steps=self.cfg.max_num_steps,
-                device=self.cfg.device,
-            )
-        else:
-            raise ValueError(
-                "Unknown sampler value {}".format(self.cfg.sampler_type)
-            )
 
     def normalize(self, images: torch.Tensor) -> torch.Tensor:
         """
@@ -402,6 +135,395 @@ class DiffusionModel:
         self.inception.update(images)
         is_score = self.inception.compute()  # (mean, std)
         return is_score[0]
+
+    @abstractmethod
+    def generate(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def train_step(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def clip_grad_norm(self, max_norm: float = 1.0):
+        pass
+
+    @abstractmethod
+    def test_step(self, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def checkpoint(self) -> Dict[str, Dict[str, nn.Parameter]]:
+        pass
+
+    @abstractmethod
+    def load_checkpoint(self, checkpoint: Dict[str, Dict[str, nn.Parameter]]):
+        pass
+
+
+class VAEModel(BaseModel):
+    def __init__(
+        self,
+        cfg: VAEModelConfig,
+        logger: Optional[logging.Logger] = None,
+    ):
+        super().__init__(cfg, logger)
+
+        self.cfg = cfg
+
+        self.encoder = VAEEncoder(
+            input_channels=3,
+            num_heads=cfg.num_heads,
+            latent_dim=cfg.latent_dim,
+            widths=cfg.vae_widths,
+        ).to(cfg.device)
+        self.decoder = VAEDecoder(
+            output_channels=3,
+            num_heads=cfg.num_heads,
+            latent_dim=cfg.latent_dim,
+            widths=cfg.vae_widths,
+        ).to(cfg.device)
+        self.reparametrizer = VAEReparametrizer()
+
+        if cfg.distributed:
+            self.encoder = DDP(
+                self.encoder,
+                device_ids=[cfg.device_ids[cfg.local_rank]],
+            )
+            self.decoder = DDP(
+                self.decoder,
+                device_ids=[cfg.device_ids[cfg.local_rank]],
+            )
+
+        self.optimizer = optim.Adam(
+            [
+                *self.encoder.parameters(),
+                *self.decoder.parameters(),
+            ],
+            lr=cfg.learning_rate,
+            weight_decay=cfg.weight_decay,
+        )
+
+        if cfg.mixed_precision:
+            self.scaler = GradScaler(cfg.device_type)
+        else:
+            self.scaler = None
+
+    @torch.no_grad()
+    def generate(
+        self,
+        images: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Generate images from the given images.
+
+        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
+        :param progress_bar bool: Whether to show the progress bar
+        :return torch.Tensor: The generated images tensor of shape (batch_size, 3, h, w)
+        """
+        images = images.to(self.cfg.device)
+        images = self.normalize(images)
+
+        self.encoder.eval()
+        self.decoder.eval()
+        mean, log_variance = self.encoder(images)
+        latents = self.reparametrizer(mean, log_variance)
+        pred_images = self.decoder(latents)
+
+        pred_images = self.denormalize(pred_images)
+        pred_images = torch.clamp(pred_images, 0, 1)
+        return pred_images
+
+    def compute_loss(
+        self,
+        images: torch.Tensor,
+        pred_images: torch.Tensor,
+        mean: torch.Tensor,
+        log_variance: torch.Tensor,
+    ):
+        image_loss = F.mse_loss(pred_images, images)
+
+        # KL divergence
+        # Clamp the log variance to avoid numerical instability
+        log_variance = torch.clamp(log_variance, -30, 20)
+        kl_loss = -0.5 * torch.sum(
+            1 + log_variance - mean.pow(2) - log_variance.exp(), dim=(1, 2, 3)
+        )
+        kl_loss = kl_loss.mean()
+
+        loss = image_loss + self.cfg.weight_kl * kl_loss
+        return loss, image_loss, kl_loss
+
+    def train_step(self, images: torch.Tensor):
+        """
+        Perform a training step.
+
+        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
+        :return Dict[str, torch.Tensor]: The metrics dictionary
+        """
+        with autocast(
+            self.cfg.device_type,
+            enabled=self.cfg.mixed_precision,
+        ):
+            with torch.no_grad():
+                images = images.to(self.cfg.device)
+                images = self.normalize(images)
+
+            self.encoder.train()
+            self.decoder.train()
+            mean, log_variance = self.encoder(images)
+            latents = self.reparametrizer(mean, log_variance)
+            pred_images = self.decoder(latents)
+
+            loss, image_loss, kl_loss = self.compute_loss(
+                images, pred_images, mean, log_variance
+            )
+
+        # Backward pass
+        self.optimizer.zero_grad()
+        if self.cfg.mixed_precision:
+            self.scaler.scale(loss).backward()
+            self.clip_grad_norm()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            self.clip_grad_norm()
+            self.optimizer.step()
+
+        return {
+            "loss": loss.item(),
+            "image_loss": image_loss.item(),
+            "kl_loss": kl_loss.item(),
+        }
+
+    def clip_grad_norm(self, max_norm: float = 1.0):
+        """
+        Clip the gradient norms of the model.
+
+        :param max_norm float: The maximum norm value
+        """
+        if self.cfg.grad_clip is None:
+            return
+
+        torch.nn.utils.clip_grad_norm_(
+            self.encoder.parameters(), max_norm=max_norm
+        )
+        torch.nn.utils.clip_grad_norm_(
+            self.decoder.parameters(), max_norm=max_norm
+        )
+
+    @torch.no_grad()
+    def test_step(self, images: torch.Tensor):
+        """
+        Perform a testing step.
+
+        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
+        :return Dict[str, torch.Tensor]: The metrics dictionary
+        """
+        with autocast(
+            self.cfg.device_type,
+            enabled=self.cfg.mixed_precision,
+        ):
+            images = images.to(self.cfg.device)
+            images = self.normalize(images)
+
+            self.encoder.eval()
+            self.decoder.eval()
+            mean, log_variance = self.encoder(images)
+            latents = self.reparametrizer(mean, log_variance)
+            pred_images = self.decoder(latents)
+
+            loss, image_loss, kl_loss = self.compute_loss(
+                images, pred_images, mean, log_variance
+            )
+            fid_score = self.compute_fid(pred_images, images)
+
+        return {
+            "loss": loss.item(),
+            "image_loss": image_loss.item(),
+            "kl_loss": kl_loss.item(),
+            "fid_score": fid_score.item(),
+        }
+
+    @torch.no_grad()
+    def checkpoint(self) -> Dict[str, Dict[str, nn.Parameter]]:
+        """
+        Get the state dictionary of the model.
+
+        :return Dict[str, Dict[str, nn.Parameter]]: The state dictionary
+        """
+        checkpoint = {"optimizer": self.optimizer.state_dict()}
+        if self.cfg.distributed:
+            encoder = self.encoder.module
+            decoder = self.decoder.module
+        else:
+            encoder = self.encoder
+            decoder = self.decoder
+        checkpoint["encoder"] = encoder.state_dict()
+        checkpoint["decoder"] = decoder.state_dict()
+        return checkpoint
+
+    @torch.no_grad()
+    def load_checkpoint(self, checkpoint: Dict[str, Dict[str, nn.Parameter]]):
+        """
+        Set the state dictionary of the model.
+
+        :param checkpoint Dict[str, Dict[str, nn.Parameter]]: The state dictionary
+        """
+        self.optimizer.load_state_dict(checkpoint["optimizer"])
+        if self.cfg.distributed:
+            encoder = self.encoder.module
+            decoder = self.decoder.module
+        else:
+            encoder = self.encoder
+            decoder = self.decoder
+        encoder.load_state_dict(checkpoint["encoder"])
+        decoder.load_state_dict(checkpoint["decoder"])
+
+    @torch.no_grad()
+    def plot_images(
+        self,
+        images: torch.Tensor,
+        num_rows=1,
+        num_cols=6,
+        save=False,
+        output_dir="outputs",
+        epoch=None,
+    ):
+        """
+        Plot the images in notebook or save them to the output directory with format `img_epoch{epoch}.png`.
+
+        :param images torch.Tensor: The images tensor of shape (batch_size, 3, h, w)
+        :param num_rows int: The number of rows
+        :param num_cols int: The number of columns
+        :param save bool: Whether to save the images
+        :param output_dir str: The output directory
+        :param epoch Optional[int]: The epoch number
+        """
+        ipy = get_ipython()
+        if ipy is None and not save:
+            return
+
+        with autocast(self.cfg.device_type, enabled=self.cfg.mixed_precision):
+            pred_images = self.generate(images)
+
+        # To float32
+        images = images.detach().cpu().permute(0, 2, 3, 1).numpy()
+        pred_images = (
+            pred_images.detach()
+            .cpu()
+            .permute(0, 2, 3, 1)
+            .numpy()
+            .astype(np.float32)
+        )
+
+        plt.figure(figsize=(num_cols * 2.0, num_rows * 4.0))
+        for row in range(num_rows):
+            for col in range(num_cols):
+                idx = row * 2 * num_cols + col
+                if idx >= images.shape[0]:
+                    continue
+                plt.subplot(2 * num_rows, num_cols, idx + 1)
+                plt.imshow(images[idx])
+                plt.axis("off")
+                plt.subplot(2 * num_rows, num_cols, idx + 1 + num_cols)
+                plt.imshow(pred_images[idx])
+                plt.axis("off")
+        plt.tight_layout()
+
+        # Choose to show or save the images
+        if ipy is not None:
+            plt.show()
+        if save:
+            os.makedirs(output_dir, exist_ok=True)
+            image_name = (
+                "img.png" if epoch is None else f"img_epoch{epoch}.png"
+            )
+            image_path = os.path.join(output_dir, image_name)
+            plt.savefig(image_path)
+            self.logger.info(f"Saved generated images at {image_path}")
+        plt.close()
+
+
+class DiffusionModel(BaseModel):
+    def __init__(
+        self,
+        cfg: DiffusionModelConfig,
+        logger: Optional[logging.Logger] = None,
+    ):
+        super().__init__(cfg, logger)
+
+        self.cfg = cfg
+
+        self.sampler = self.get_sampler(cfg.max_num_steps)
+        self.clip = FrozenOpenCLIPEmbedder(
+            precision=cfg.clip_precision,
+            device=cfg.device,
+        )
+        self.diffusion = Diffusion(
+            latent_dim=3,
+            context_dim=cfg.context_dim,
+            hidden_context_dim=cfg.hidden_context_dim,
+            time_dim=cfg.time_dim,
+            num_heads=cfg.num_heads,
+            unet_scale=cfg.unet_scale,
+        ).to(cfg.device)
+
+        if cfg.ema_enabled:
+            self.diffusion_ema = Diffusion(
+                latent_dim=3,
+                context_dim=cfg.context_dim,
+                hidden_context_dim=cfg.hidden_context_dim,
+                time_dim=cfg.time_dim,
+                num_heads=cfg.num_heads,
+                unet_scale=cfg.unet_scale,
+            ).to(cfg.device)
+            self.diffusion_ema.load_state_dict(self.diffusion.state_dict())
+        else:
+            self.diffusion_ema = None
+
+        if cfg.distributed:
+            self.diffusion = DDP(
+                self.diffusion,
+                device_ids=[cfg.device_ids[cfg.local_rank]],
+            )
+
+        self.loss_func = nn.MSELoss()
+        self.optimizer = optim.Adam(
+            self.diffusion.parameters(),
+            lr=cfg.learning_rate,
+            weight_decay=cfg.weight_decay,
+        )
+
+        if cfg.mixed_precision:
+            self.scaler = GradScaler(cfg.device_type)
+        else:
+            self.scaler = None
+
+    def get_sampler(self, num_steps: int):
+        """
+        Get the sampler for the given number of steps.
+
+        :param num_steps int: The number of steps
+        :return Sampler: The sampler
+        """
+        if self.cfg.sampler_type == "ddpm":
+            return DDPMSampler(
+                num_steps=num_steps,
+                max_num_steps=self.cfg.max_num_steps,
+                device=self.cfg.device,
+            )
+        elif self.cfg.sampler_type == "ddim":
+            return DDIMSampler(
+                num_steps=num_steps,
+                max_num_steps=self.cfg.max_num_steps,
+                device=self.cfg.device,
+            )
+        else:
+            raise ValueError(
+                "Unknown sampler value {}".format(self.cfg.sampler_type)
+            )
 
     @torch.no_grad()
     def generate(

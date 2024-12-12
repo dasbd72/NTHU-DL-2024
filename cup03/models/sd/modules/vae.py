@@ -72,50 +72,49 @@ class VAEEncoder(nn.Module):
         input_channels,
         num_heads=8,
         latent_dim=4,
-        scale=4,
+        widths: tuple[int, int, int] = (64, 128, 256),
     ):
         super(VAEEncoder, self).__init__()
 
         self.latent_encoder = nn.Sequential(
             nn.Conv2d(
-                input_channels, scale * 16, kernel_size=3, padding=1
+                input_channels, widths[0], kernel_size=3, padding=1
             ),  # h, w
-            VAEResidualBlock(scale * 16, scale * 16),
-            VAEResidualBlock(scale * 16, scale * 16),
+            VAEResidualBlock(widths[0], widths[0]),
+            VAEResidualBlock(widths[0], widths[0]),
             nn.ConstantPad2d((0, 1, 0, 1), 0),  # h/2 + 1, w/2 + 1
             nn.Conv2d(
-                scale * 16, scale * 16, kernel_size=3, stride=2, padding=0
+                widths[0], widths[0], kernel_size=3, stride=2, padding=0
             ),  # h/2, w/2
-            VAEResidualBlock(scale * 16, scale * 32),
-            VAEResidualBlock(scale * 32, scale * 32),
+            VAEResidualBlock(widths[0], widths[1]),
+            VAEResidualBlock(widths[1], widths[1]),
             nn.ConstantPad2d((0, 1, 0, 1), 0),  # h/2 + 1, w/2 + 1
             nn.Conv2d(
-                scale * 32, scale * 32, kernel_size=3, stride=2, padding=0
+                widths[1], widths[1], kernel_size=3, stride=2, padding=0
             ),  # h/4, w/4
-            VAEResidualBlock(scale * 32, scale * 64),
-            VAEResidualBlock(scale * 64, scale * 64),
+            VAEResidualBlock(widths[1], widths[2]),
+            VAEResidualBlock(widths[2], widths[2]),
             nn.ConstantPad2d((0, 1, 0, 1), 0),  # h/2 + 1, w/2 + 1
             nn.Conv2d(
-                scale * 64, scale * 64, kernel_size=3, stride=2, padding=0
+                widths[2], widths[2], kernel_size=3, stride=2, padding=0
             ),  # h/8, w/8
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEAttentionBlock(scale * 64, num_heads=num_heads),
-            VAEResidualBlock(scale * 64, scale * 64),
-            nn.GroupNorm(32, scale * 64),
+            VAEResidualBlock(widths[2], widths[2]),
+            VAEResidualBlock(widths[2], widths[2]),
+            VAEResidualBlock(widths[2], widths[2]),
+            VAEAttentionBlock(widths[2], num_heads=num_heads),
+            VAEResidualBlock(widths[2], widths[2]),
+            nn.GroupNorm(32, widths[2]),
             nn.SiLU(),
-            nn.Conv2d(scale * 64, latent_dim * 2, kernel_size=3, padding=1),
+            nn.Conv2d(widths[2], latent_dim * 2, kernel_size=3, padding=1),
             nn.Conv2d(
                 latent_dim * 2, latent_dim * 2, kernel_size=1, padding=0
             ),  # latent space
         )  # (batch_size, latent_dim*2, h/8, w/8)
 
-    def encode(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor):
         """
         :param x torch.Tensor: (batch_size, input_channels, h, w)
-        :param noise torch.Tensor: (batch_size, latent_dim, h/8, w/8)
-        :return torch.Tensor: (batch_size, latent_dim, h/8, w/8)
+        :return tuple[torch.Tensor, torch.Tensor]: (batch_size, latent_dim, h/8, w/8), (batch_size, latent_dim, h/8, w/8)
         """
         x = self.latent_encoder(x)  # (batch_size, latent_dim*2, h/8, w/8)
         mean, log_variance = torch.chunk(
@@ -123,7 +122,12 @@ class VAEEncoder(nn.Module):
         )  # (batch_size, latent_dim, h/8, w/8), (batch_size, latent_dim, h/8, w/8)
         return mean, log_variance
 
-    def reparametrize(self, mean, log_variance):
+
+class VAEReparametrizer(nn.Module):
+    def __init__(self):
+        super(VAEReparametrizer, self).__init__()
+
+    def forward(self, mean: torch.Tensor, log_variance: torch.Tensor):
         """
         :param mean torch.Tensor: (batch_size, latent_dim, h/8, w/8)
         :param log_variance torch.Tensor: (batch_size, latent_dim, h/8, w/8)
@@ -134,10 +138,9 @@ class VAEEncoder(nn.Module):
         )  # (batch_size, latent_dim, h/8, w/8)
         # Clamp the log variance between -30 and 20, so that the variance is between (circa) 1e-14 and 1e8.
         log_variance = torch.clamp(log_variance, -30, 20)
-        variance = torch.exp(
-            log_variance
+        stddev = torch.exp(
+            0.5 * log_variance
         )  # (batch_size, latent_dim, h/8, w/8)
-        stddev = torch.sqrt(variance)  # (batch_size, latent_dim, h/8, w/8)
         # Transform distribution from N(0, 1) to N(mean, stddev)
         x = mean + stddev * noise  # (batch_size, latent_dim, h/8, w/8)
 
@@ -146,15 +149,6 @@ class VAEEncoder(nn.Module):
         x *= 0.18215
         return x
 
-    def forward(self, x: torch.Tensor):
-        """
-        :param x torch.Tensor: (batch_size, input_channels, h, w)
-        :return torch.Tensor: (batch_size, latent_dim, h/8, w/8)
-        """
-        mean, log_variance = self.encode(x)
-        latent = self.reparametrize(mean, log_variance)
-        return latent
-
 
 class VAEDecoder(nn.Module):
     def __init__(
@@ -162,37 +156,36 @@ class VAEDecoder(nn.Module):
         output_channels,
         num_heads=8,
         latent_dim=4,
-        scale=4,
+        widths: tuple[int, int, int] = (64, 128, 256),
     ):
         super(VAEDecoder, self).__init__()
 
         self.latent_decoder = nn.Sequential(
             nn.Conv2d(latent_dim, latent_dim, kernel_size=1, padding=0),
-            nn.Conv2d(latent_dim, scale * 64, kernel_size=3, padding=1),
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEAttentionBlock(scale * 64, num_heads=num_heads),
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEResidualBlock(scale * 64, scale * 64),
+            nn.Conv2d(latent_dim, widths[2], kernel_size=3, padding=1),
+            VAEResidualBlock(widths[2], widths[2]),
+            VAEAttentionBlock(widths[2], num_heads=num_heads),
+            VAEResidualBlock(widths[2], widths[2]),
+            VAEResidualBlock(widths[2], widths[2]),
+            VAEResidualBlock(widths[2], widths[2]),
             nn.Upsample(scale_factor=2, mode="nearest"),  # h/4, w/4
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEResidualBlock(scale * 64, scale * 64),
-            VAEResidualBlock(scale * 64, scale * 64),
+            VAEResidualBlock(widths[2], widths[2]),
+            VAEResidualBlock(widths[2], widths[2]),
             nn.Upsample(scale_factor=2, mode="nearest"),  # h/2, w/2
-            nn.Conv2d(scale * 64, scale * 64, kernel_size=3, padding=1),
-            VAEResidualBlock(scale * 64, scale * 32),
-            VAEResidualBlock(scale * 32, scale * 32),
-            VAEResidualBlock(scale * 32, scale * 32),
+            nn.Conv2d(widths[2], widths[2], kernel_size=3, padding=1),
+            VAEResidualBlock(widths[2], widths[1]),
+            VAEResidualBlock(widths[1], widths[1]),
             nn.Upsample(scale_factor=2, mode="nearest"),  # h, w
-            nn.Conv2d(scale * 32, scale * 32, kernel_size=3, padding=1),
-            VAEResidualBlock(scale * 32, scale * 16),
-            VAEResidualBlock(scale * 16, scale * 16),
-            VAEResidualBlock(scale * 16, scale * 16),
-            nn.GroupNorm(32, scale * 16),
+            nn.Conv2d(widths[1], widths[1], kernel_size=3, padding=1),
+            VAEResidualBlock(widths[1], widths[0]),
+            VAEResidualBlock(widths[0], widths[0]),
+            nn.GroupNorm(32, widths[0]),
             nn.SiLU(),
-            nn.Conv2d(scale * 16, output_channels, kernel_size=3, padding=1),
+            nn.Conv2d(widths[0], output_channels, kernel_size=3, padding=1),
         )  # (batch_size, output_channels, h, w)
+
+        self.latent_decoder[-1].weight.data.zero_()
+        self.latent_decoder[-1].bias.data.zero_()
 
     def forward(self, x: torch.Tensor):
         """

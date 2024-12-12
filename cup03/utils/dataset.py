@@ -20,6 +20,7 @@ class DatasetToolConfig:
     image_path: str = "./dataset"
     text2img_path: str = "./dataset/dataset/text2ImgData.pkl"
     test_data_path: str = "./dataset/dataset/testData.pkl"
+    model_type: Literal["vae", "diffusion", "sd"] = "vae"
 
 
 class Text2ImgDataset(Dataset):
@@ -129,13 +130,33 @@ class DatasetTool:
         return id2word, vocab, word2id, df_train, df_test
 
     def get_train_transform(self, image_size: int):
-        return transforms.Compose(
-            [
-                transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-            ]
-        )
+        if self.cfg.model_type in ["sd", "diffusion"]:
+            return transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(image_size, scale=(0.8, 1.0)),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                ]
+            )
+        else:
+            return transforms.Compose(
+                [
+                    transforms.RandomResizedCrop(image_size, scale=(0.2, 1.0)),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.RandomVerticalFlip(),
+                    transforms.RandomChoice(
+                        [
+                            transforms.ColorJitter(brightness=0.2),
+                            transforms.ColorJitter(contrast=0.2),
+                            transforms.ColorJitter(saturation=0.2),
+                            transforms.ColorJitter(hue=0.2),
+                        ]
+                    ),
+                    transforms.RandomAutocontrast(),
+                    transforms.RandomAdjustSharpness(0.5),
+                    transforms.ToTensor(),
+                ]
+            )
 
     def get_val_transform(self, image_size: int):
         return transforms.Compose(
