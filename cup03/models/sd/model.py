@@ -66,6 +66,7 @@ class BaseModel:
             self.logger = logger
         else:
             self.logger = logging.getLogger(__name__)
+            self.logger.handlers.clear()
             self.logger.setLevel(logging.INFO)
             self.logger.addHandler(logging.StreamHandler())
 
