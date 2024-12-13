@@ -494,7 +494,7 @@ class DiffusionModel(BaseModel):
             )
 
         self.loss_func = nn.MSELoss()
-        self.optimizer = optim.Adam(
+        self.optimizer = optim.AdamW(
             self.diffusion.parameters(),
             lr=cfg.learning_rate,
             weight_decay=cfg.weight_decay,
