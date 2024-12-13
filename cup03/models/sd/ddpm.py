@@ -109,7 +109,7 @@ class DDPMSampler:
         self,
         steps: torch.IntTensor,
         latents: torch.FloatTensor,
-        noice: torch.FloatTensor,
+        noise: torch.FloatTensor,
     ):
         """
         Denoise the latents at the given step.
@@ -118,7 +118,7 @@ class DDPMSampler:
 
         :param steps torch.IntTensor: The steps to denoise at, shape (batch_size,)
         :param latents torch.FloatTensor: The latents tensor of shape (batch_size, latent_dim, h, w)
-        :param noice torch.FloatTensor: The output tensor of shape (batch_size, latent_dim, h, w)
+        :param noise torch.FloatTensor: The output tensor of shape (batch_size, latent_dim, h, w)
         :return torch.FloatTensor: The denoised latents tensor, shape (batch_size, latent_dim, h, w)
         :return Tuple[torch.FloatTensor, torch.FloatTensor]: The predicted original latent and the predicted noisy latents,
             shape (batch_size, latent_dim, h, w).
@@ -136,62 +136,57 @@ class DDPMSampler:
         steps = steps * self.stride  # (batch_size,)
 
         # 1. compute alphas, betas
-        alpha_cumprod = self.alphas_cumprod[steps]  # (batch_size,)
-        prev_alphas_cumprod = torch.where(
-            prev_step >= 0,
-            self.alphas_cumprod[
-                torch.clamp(prev_step, min=0, max=self.max_num_steps - 1)
-            ],
-            torch.ones_like(alpha_cumprod, device=device, dtype=dtype),
-        )  # (batch_size,)
-        alpha_cumprod = alpha_cumprod.view(
+        alpha_prod = self.alphas_cumprod[steps]  # (batch_size,)
+        prev_alphas_prod = torch.where(
+            steps > 0,
+            self.alphas_cumprod[prev_step.clamp(min=0)],
+            torch.ones_like(alpha_prod, device=device, dtype=dtype),
+        )
+        alpha_prod = alpha_prod.view(-1, 1, 1, 1)  # (batch_size, 1, 1, 1)
+        prev_alphas_prod = prev_alphas_prod.view(
             -1, 1, 1, 1
         )  # (batch_size, 1, 1, 1)
-        prev_alphas_cumprod = prev_alphas_cumprod.view(
-            -1, 1, 1, 1
-        )  # (batch_size, 1, 1, 1)
-        beta_cumprod = 1 - alpha_cumprod  # (batch_size, 1, 1, 1)
-        prev_beta_cumprod = 1 - prev_alphas_cumprod  # (batch_size, 1, 1, 1)
-        alpha = alpha_cumprod / prev_alphas_cumprod  # (batch_size, 1, 1, 1)
+        beta_prod = 1 - alpha_prod  # (batch_size, 1, 1, 1)
+        prev_beta_prod = 1 - prev_alphas_prod  # (batch_size, 1, 1, 1)
+        alpha = alpha_prod / prev_alphas_prod  # (batch_size, 1, 1, 1)
         beta = 1 - alpha  # (batch_size, 1, 1, 1)
 
         # 2. compute predicted original sample from predicted noise also called
         # "predicted x_0" of formula (15) from https://arxiv.org/pdf/2006.11239.pdf
-        pred_original_sample = (latents - (beta_cumprod**0.5) * noice) / (
-            alpha_cumprod**0.5
+        pred_original_sample = (latents - (beta_prod**0.5) * noise) / (
+            alpha_prod**0.5
         )  # (batch_size, latent_dim, h, w)
 
         # 3. Compute coefficients for pred_original_sample x_0 and current sample x_t
         # See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
         pred_original_sample_coeff = (
-            (prev_alphas_cumprod**0.5) * beta
-        ) / beta_cumprod
-        sample_coeff = (alpha**0.5) * prev_beta_cumprod / beta_cumprod
+            (prev_alphas_prod**0.5) * beta
+        ) / beta_prod
+        current_sample_coeff = (alpha**0.5) * prev_beta_prod / beta_prod
 
         # 4. Compute the new sample
         # See formula (7) from https://arxiv.org/pdf/2006.11239.pdf
         pred_prev_sample = (
             pred_original_sample_coeff * pred_original_sample
-            + sample_coeff * latents
+            + current_sample_coeff * latents
         )  # Mean, (batch_size, latent_dim, h, w)
 
         # 5. Add noise to the new sample
-        noise = self.sample_noise(latents.shape, device=device, dtype=dtype)
         # For t > 0, compute predicted variance βt (see formula (6) and (7) from https://arxiv.org/pdf/2006.11239.pdf)
         # and sample from it to get previous sample
         # x_{t-1} ~ N(pred_prev_sample, variance) == add variance to pred_sample
-        variance = (
-            prev_beta_cumprod / beta_cumprod * beta
-        )  # (batch_size, 1, 1, 1)
+        variance = prev_beta_prod / beta_prod * beta  # (batch_size, 1, 1, 1)
         variance = torch.clamp(variance, min=1e-20)
-        variance = torch.where(
+        variance = variance.sqrt()  # (batch_size, 1, 1, 1)
+        noise = self.sample_noise(latents.shape, device=device, dtype=dtype)
+        noise = torch.where(
             (steps > 0).view(-1, 1, 1, 1),
-            variance.sqrt(),
-            torch.zeros_like(variance, device=device, dtype=dtype),
-        )  # (batch_size, 1, 1, 1)
-        variance = variance * noise  # (batch_size, latent_dim, h, w)
+            noise,
+            torch.zeros_like(noise, device=device, dtype=dtype),
+        )  # (batch_size, latent_dim, h, w)
+        noise = variance * noise  # (batch_size, latent_dim, h, w)
 
         pred_prev_sample = (
-            pred_prev_sample + variance
+            pred_prev_sample + noise
         )  # (batch_size, latent_dim, h, w)
         return pred_original_sample, pred_prev_sample

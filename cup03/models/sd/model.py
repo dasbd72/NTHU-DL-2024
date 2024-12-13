@@ -456,7 +456,11 @@ class DiffusionModel(BaseModel):
 
         self.cfg = cfg
 
-        self.sampler = self.get_sampler(cfg.max_num_steps)
+        self.sampler = DDPMSampler(
+            num_steps=self.cfg.max_num_steps,
+            max_num_steps=self.cfg.max_num_steps,
+            device=self.cfg.device,
+        )
         self.clip = FrozenOpenCLIPEmbedder(
             precision=cfg.clip_precision,
             device=cfg.device,
