@@ -6,7 +6,9 @@ python-dotenv
 numpy<2.0.0
 matplotlib==3.9.3
 scikit-image<0.20.0
-moviepy==1.0.3
-pygame==2.6.1
+moviepy<1.0.0
+imageio<2.5.0
+imageio-ffmpeg==0.5.1
+pygame<2.3.0
 tensorflow[and-cuda]==2.15.1
 tensorflow-probability<0.24.0
